@@ -77,6 +77,11 @@ final class Store: ObservableObject {
 
     var awaiting: Int { sessions.filter { $0.state != .working }.count }
 
+    /// 列表只显示有结果的会话；正在跑的不占位置（否则每开一个对话就多一行，永远挂着）
+    var pending: [Session] { sessions.filter { $0.state != .working } }
+
+    var running: Int { sessions.filter { $0.state == .working }.count }
+
     func ingest(_ ev: HookEvent, source: String = "hook") {
         let cwd = ev.cwd ?? ""
         let project = ev.project ?? (cwd.isEmpty ? agentLabel(ev.agent) : (cwd as NSString).lastPathComponent)
@@ -1188,16 +1193,20 @@ struct PanelView: View {
 
             Divider()
 
-            if store.sessions.isEmpty {
+            if store.pending.isEmpty {
                 VStack(spacing: 6) {
-                    Text("没有进行中的会话").font(.system(size: 12)).foregroundStyle(.secondary)
-                    Text("在 Claude Code 或 Codex 里发一条消息试试").font(.system(size: 10)).foregroundStyle(.tertiary)
+                    Text(store.running > 0 ? "都在跑，还没有结果" : "没有待处理的会话")
+                        .font(.system(size: 12)).foregroundStyle(.secondary)
+                    Text(store.running > 0
+                         ? "\(store.running) 个会话正在运行，跑完会提醒你"
+                         : "在 Claude Code 或 Codex 里发一条消息试试")
+                        .font(.system(size: 10)).foregroundStyle(.tertiary)
                 }
                 .frame(maxWidth: .infinity).padding(.vertical, 30)
             } else {
                 ScrollView {
                     VStack(spacing: 4) {
-                        ForEach(store.sessions) { s in
+                        ForEach(store.pending) { s in
                             RowView(session: s).onTapGesture { onJump(s) }
                         }
                     }
