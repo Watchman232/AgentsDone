@@ -305,11 +305,60 @@ enum CodexTitle {
     }
 }
 
+/// Codex 的「等你批准 / 等你回答」事件 → 一行摘要
+enum CodexNeeds {
+    static let requestKinds: Set<String> = [
+        "exec_approval_request", "apply_patch_approval_request",
+        "request_user_input", "request_permissions", "elicitation_request",
+    ]
+
+    static func detail(kind: String, payload: [String: Any]) -> String {
+        func str(_ v: Any?) -> String {
+            if let s = v as? String { return s }
+            if let a = v as? [String] { return a.joined(separator: " ") }
+            if let a = v as? [[String: Any]] { return a.compactMap { $0["text"] as? String }.joined(separator: " ") }
+            return ""
+        }
+        func clean(_ raw: String) -> String {
+            var t = raw.replacingOccurrences(of: "\n", with: " ").trimmingCharacters(in: .whitespacesAndNewlines)
+            while t.contains("  ") { t = t.replacingOccurrences(of: "  ", with: " ") }
+            return String(t.prefix(56))
+        }
+
+        switch kind {
+        case "exec_approval_request":
+            let cmd = clean(str(payload["command"]))
+            return cmd.isEmpty ? "等待批准：执行命令" : "等待批准：\(cmd)"
+        case "apply_patch_approval_request":
+            let target = clean(str(payload["grant_root"]).isEmpty ? str(payload["path"]) : str(payload["grant_root"]))
+            let reason = clean(str(payload["reason"]))
+            if !target.isEmpty { return "等待批准：修改 \(target)" }
+            return reason.isEmpty ? "等待批准：修改文件" : "等待批准：\(reason)"
+        case "request_user_input":
+            // questions[0].question
+            if let qs = payload["questions"] as? [[String: Any]], let q = qs.first,
+               case let text = clean(str(q["question"])), !text.isEmpty {
+                return "等待回答：\(text)"
+            }
+            let q = clean(str(payload["question"]))
+            return q.isEmpty ? "等待回答" : "等待回答：\(q)"
+        case "request_permissions":
+            let r = clean(str(payload["reason"]))
+            return r.isEmpty ? "等待授权" : "等待授权：\(r)"
+        default:
+            let r = clean(str(payload["reason"]))
+            return r.isEmpty ? "等待你的确认" : "等待你的确认：\(r)"
+        }
+    }
+}
+
 final class CodexWatcher {
     private let root: String
     private var stream: FSEventStreamRef?
     private var offsets: [String: Int] = [:]
     private var meta: [String: (cwd: String, host: String, bundle: String, title: String)] = [:]
+    /// 已经发过「等你批准」，等后续事件把它翻回运行中
+    private var waiting: [String: Bool] = [:]
     var onEvent: ((HookEvent) -> Void)?
 
     init(root: String? = nil) {
@@ -429,15 +478,29 @@ final class CodexWatcher {
                     .flatMap { CodexTitle.name(id: $0) } ?? info.3
                 switch kind {
                 case "task_started":
+                    waiting.removeValue(forKey: path)
                     emit(HookEvent(agent: "codex", kind: "working", sessionId: sid, cwd: info.cwd,
                                    title: title, detail: "", host: info.host, bundleId: info.bundle), path)
                 case "task_complete":
+                    waiting.removeValue(forKey: path)
                     let msg = (payload["last_agent_message"] as? String ?? "")
                         .replacingOccurrences(of: "\n", with: " ")
                     emit(HookEvent(agent: "codex", kind: "done", sessionId: sid, cwd: info.cwd,
                                    title: title, detail: String(msg.prefix(80)),
                                    host: info.host, bundleId: info.bundle), path)
-                default: break
+                default:
+                    // 审批 / 提问：等你 → 需要你
+                    if CodexNeeds.requestKinds.contains(kind) {
+                        waiting[path] = true
+                        emit(HookEvent(agent: "codex", kind: "needs", sessionId: sid, cwd: info.cwd,
+                                       title: title, detail: CodexNeeds.detail(kind: kind, payload: payload),
+                                       host: info.host, bundleId: info.bundle), path)
+                    } else if waiting[path] == true {
+                        // 批准后接着跑（exec_command_begin / patch_apply_begin / item_completed…）
+                        waiting.removeValue(forKey: path)
+                        emit(HookEvent(agent: "codex", kind: "working", sessionId: sid, cwd: info.cwd,
+                                       title: title, detail: "", host: info.host, bundleId: info.bundle), path)
+                    }
                 }
             }
         }

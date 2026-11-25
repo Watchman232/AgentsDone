@@ -19,6 +19,15 @@ DUMP = "--dump" in sys.argv
 INTERVAL = 1.5
 
 offs = {}
+waiting = {}
+
+# Codex 里值得监听的事件：任务边界 + 「等你批准/回答」+ 批准后接着跑的各种执行事件
+CODEX_REQUEST_EVENTS = ("exec_approval_request", "apply_patch_approval_request",
+                        "request_user_input", "request_permissions", "elicitation_request")
+CODEX_WATCH_EVENTS = ("task_started", "task_complete") + CODEX_REQUEST_EVENTS + (
+    "exec_command_begin", "exec_command_end", "patch_apply_begin", "patch_apply_end",
+    "item_completed", "agent_message", "network_approval_resolved",
+)
 meta = {}
 spool_off = 0
 primed = False
@@ -95,6 +104,38 @@ def codex_db_title(sid):
         return ""
     finally:
         con.close()
+
+
+def codex_needs_detail(kind, p):
+    """Codex 等你批准/回答时给一行摘要"""
+    def pick(*keys):
+        for k in keys:
+            v = p.get(k)
+            if isinstance(v, list):
+                v = " ".join(str(x) for x in v if isinstance(x, (str, int, float)))
+            if isinstance(v, str) and v.strip():
+                return re.sub(r"\\s+", " ", v).strip()[:56]
+        return ""
+
+    if kind == "exec_approval_request":
+        cmd = pick("command", "reason")
+        return "等待批准：%s" % cmd if cmd else "等待批准：执行命令"
+    if kind == "apply_patch_approval_request":
+        target = pick("grant_root", "path", "reason")
+        return "等待批准：修改 %s" % target if target else "等待批准：修改文件"
+    if kind == "request_user_input":
+        qs = p.get("questions")
+        if isinstance(qs, list) and qs and isinstance(qs[0], dict):
+            q = re.sub(r"\\s+", " ", str(qs[0].get("question") or "")).strip()[:56]
+            if q:
+                return "等待回答：%s" % q
+        q = pick("question")
+        return "等待回答：%s" % q if q else "等待回答"
+    if kind == "request_permissions":
+        r = pick("reason", "scope")
+        return "等待授权：%s" % r if r else "等待授权"
+    r = pick("reason")
+    return "等待你的确认：%s" % r if r else "等待你的确认"
 
 
 def codex_title(path):
@@ -222,7 +263,7 @@ def scan(emit):
         cwd, originator, source, title = codex_meta(path)
         sid = os.path.basename(path).replace("rollout-", "").replace(".jsonl", "")
         for line in text.splitlines():
-            if '"task_started"' not in line and '"task_complete"' not in line:
+            if not any(k in line for k in CODEX_WATCH_EVENTS):
                 continue
             try:
                 obj = json.loads(line)
@@ -231,14 +272,25 @@ def scan(emit):
             if obj.get("type") != "event_msg":
                 continue
             p = obj.get("payload", {}) or {}
-            kind = p.get("type")
+            kind = p.get("type") or ""
             if kind == "task_started":
+                waiting.pop(path, None)
                 out({"agent": "codex", "kind": "working", "session": sid, "cwd": cwd,
                      "originator": originator, "source": source, "title": title, "detail": ""})
             elif kind == "task_complete":
+                waiting.pop(path, None)
                 out({"agent": "codex", "kind": "done", "session": sid, "cwd": cwd,
                      "originator": originator, "source": source, "title": title,
                      "detail": (p.get("last_agent_message") or "")[:80]})
+            elif kind in CODEX_REQUEST_EVENTS:
+                waiting[path] = True
+                out({"agent": "codex", "kind": "needs", "session": sid, "cwd": cwd,
+                     "originator": originator, "source": source, "title": title,
+                     "detail": codex_needs_detail(kind, p)})
+            elif waiting.get(path):
+                waiting.pop(path, None)
+                out({"agent": "codex", "kind": "working", "session": sid, "cwd": cwd,
+                     "originator": originator, "source": source, "title": title, "detail": ""})
 
     # ---- Claude：读 hook 写进来的 spool ----
     new, data = read_new(SPOOL, spool_off)

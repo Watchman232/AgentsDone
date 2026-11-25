@@ -89,15 +89,23 @@ Claude Code 需要你批准某个操作（比如 `git push`、写工作区外的
 实现上用的是 `PermissionRequest` hook（审批弹窗一出现就触发，不用等 `Notification` 那几秒），
 批准后 `PostToolUse` 立刻把它翻回"运行中"，所以那一行会自己消失，不会一直挂着。
 
-**其它 Agent 目前没有这个能力**，因为它们的本地数据里没有"等待批准"这个状态：
+**Codex 也有**（读 rollout 里的审批事件），剩下两家没有：
 
-| Agent | 为什么做不到 |
-|---|---|
-| Codex | rollout 只记录 `task_started`/`task_complete`/`item_completed`，审批走扩展与 app-server 之间的 IPC，不落盘 |
-| DeepSeek Harness | `approvalState` 投影只存审批策略和"轮次是否打开"，待批请求只在运行时视图里，不落盘；完整会话日志是 zstd 压缩 |
-| ZCode | tasks 表只有任务状态（跑完/出错），没有审批态 |
+| Agent | 判断依据 | 备注 |
+|---|---|---|
+| Codex | rollout 里的 `exec_approval_request` / `apply_patch_approval_request` / `request_user_input` / `request_permissions` 事件 | 需要 **不是** full access 模式才会产生（`approval_policy` 为 `on-request` 等）；Plan 模式提问不受此限 |
+| DeepSeek Harness | ❌ | `approvalState` 投影只存审批策略和"轮次是否打开"，待批请求只在运行时视图里，不落盘；完整会话日志是 zstd 压缩 |
+| ZCode | ❌ | tasks 表只有任务状态（跑完/出错），没有审批态 |
 
-对这三种，卡在审批时它们只是"日志不再增长"，AgentDone 看到的就是一直在跑 —— 也就不会提醒。
+对最后两家，卡在审批时它们只是"日志不再增长"，AgentDone 看到的就是一直在跑 —— 也就不会提醒。
+
+Codex 的摘要长这样（批准后 `exec_command_begin` / `patch_apply_begin` 一到就翻回运行中）：
+
+```
+等待批准：git push origin main
+等待批准：修改 /user/me/mf-duplexDemo/config
+等待回答：要我用 4 卡还是 8 卡跑这次训练？
+```
 
 ## 远程集群（VS Code Remote-SSH / devspace）
 
