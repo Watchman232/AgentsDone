@@ -77,8 +77,8 @@ final class Store: ObservableObject {
 
     var awaiting: Int { sessions.filter { $0.state != .working }.count }
 
-    /// 列表只显示有结果的会话；正在跑的不占位置（否则每开一个对话就多一行，永远挂着）
-    var pending: [Session] { sessions.filter { $0.state != .working } }
+    /// 列表显示全部会话（运行中 / 已完成 / 待批准），排序见 ingest
+    var pending: [Session] { sessions }
 
     var running: Int { sessions.filter { $0.state == .working }.count }
 
@@ -131,8 +131,9 @@ final class Store: ObservableObject {
     func ack(_ id: String) { sessions.removeAll { $0.id == id } }
     func clearDone() { sessions.removeAll { $0.state != .working } }
     func prune() {
+        // 现在运行中也显示，所以它同样要过期：6 小时没有任何动静的会话不该一直占着
         let cutoff = Date().addingTimeInterval(-6 * 3600)
-        sessions.removeAll { $0.updated < cutoff && $0.state != .working }
+        sessions.removeAll { $0.updated < cutoff }
     }
 
     func json() -> Data {
@@ -1340,32 +1341,37 @@ struct PanelView: View {
     var onClear: () -> Void
     var onMute: () -> Void
 
+    /// 头部：有待处理的就先报待处理，否则报运行中
+    var headerSummary: String {
+        if store.awaiting > 0 { return "\(store.awaiting) 个待处理" }
+        if store.running > 0 { return "\(store.running) 个运行中" }
+        return "无会话"
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 6) {
                 Text("AgentDone").font(.system(size: 12, weight: .semibold))
                 Spacer()
-                Text(store.awaiting == 0 ? "无待处理" : "\(store.awaiting) 个待处理")
+                Text(headerSummary)
                     .font(.system(size: 11)).foregroundStyle(.secondary)
             }
             .padding(.horizontal, 14).padding(.top, 11).padding(.bottom, 9)
 
             Divider()
 
-            if store.pending.isEmpty {
+            if store.sessions.isEmpty {
                 VStack(spacing: 6) {
-                    Text(store.running > 0 ? "都在跑，还没有结果" : "没有待处理的会话")
+                    Text("还没有会话")
                         .font(.system(size: 12)).foregroundStyle(.secondary)
-                    Text(store.running > 0
-                         ? "\(store.running) 个会话正在运行，跑完会提醒你"
-                         : "在 Claude Code 或 Codex 里发一条消息试试")
+                    Text("在 Claude Code、Codex、DeepSeek Harness 或 ZCode 里发一条消息试试")
                         .font(.system(size: 10)).foregroundStyle(.tertiary)
                 }
                 .frame(maxWidth: .infinity).padding(.vertical, 30)
             } else {
                 ScrollView {
                     VStack(spacing: 4) {
-                        ForEach(store.pending) { s in
+                        ForEach(store.sessions) { s in
                             RowView(session: s).onTapGesture { onJump(s) }
                         }
                     }
@@ -1411,8 +1417,14 @@ struct RowView: View {
 
     var stateText: String {
         switch session.state {
-        case .needs: return "需要你"
-        case .done: return "完成"
+        case .needs:
+            // 「需要你」的具体原因很多，挑最准的那个词
+            if session.detail.hasPrefix("等待批准") { return "待批准" }
+            if session.detail.hasPrefix("等待回答") { return "待回答" }
+            if session.detail.hasPrefix("等待授权") { return "待授权" }
+            if session.detail.hasPrefix("等待你的确认") { return "待确认" }
+            return "需要你"
+        case .done: return "已完成"
         case .working: return "运行中"
         }
     }
@@ -1623,9 +1635,6 @@ enum Snapshot {
             HookEvent(agent: "claude", kind: "needs", sessionId: "a", cwd: "/Users/me/work/api-server",
                       project: "api-server", title: "复盘上周的权限模型改造",
                       detail: "Claude needs your permission to use Bash", host: "VS Code", bundleId: "com.microsoft.VSCode"),
-            HookEvent(agent: "codex", kind: "done", sessionId: "b", cwd: "/Users/me/work/web-client",
-                      project: "web-client", title: "重构订单页的数据层",
-                      detail: "重构完成，12 个测试全部通过", host: "VS Code", bundleId: "com.microsoft.VSCode"),
             HookEvent(agent: "claude", kind: "done", sessionId: "c", cwd: "/Users/me/work/infra",
                       project: "infra", title: "Helm chart 升到 1.4",
                       detail: "Helm chart 已更新", host: "iTerm", bundleId: "com.googlecode.iterm2"),
@@ -1639,7 +1648,14 @@ enum Snapshot {
                       bundleId: "com.deepseek.dsh"),
             HookEvent(agent: "zcode", kind: "needs", sessionId: "f", cwd: "/Users/me/work/admin-panel",
                       project: "admin-panel", title: "实现登录页",
-                      detail: "任务出错", host: "ZCode", bundleId: "dev.zcode.app")
+                      detail: "任务出错", host: "ZCode", bundleId: "dev.zcode.app"),
+            HookEvent(agent: "claude", kind: "needs", sessionId: "h", cwd: "/Users/me/work/api-server",
+                      project: "api-server", title: "把限流挪到网关层",
+                      detail: "等待批准：Bash · git push origin main",
+                      host: "iTerm", bundleId: "com.googlecode.iterm2"),
+            HookEvent(agent: "codex", kind: "working", sessionId: "i", cwd: "/Users/me/work/agent-core",
+                      project: "agent-core", title: "重写评测脚本支持多卡并行",
+                      detail: "", host: "VS Code（远程）", bundleId: "com.microsoft.VSCode"),
         ]
         for e in samples { store.ingest(e) }
         _ = now
