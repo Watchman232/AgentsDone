@@ -206,13 +206,37 @@ func sessionTitle(_ path: String?) -> String {
     return String(title.prefix(60))
 }
 
+/// 「等待批准：Bash · git push origin main」——替你省掉一次切窗口才知道批什么
+func approvalDetail(_ input: [String: Any]) -> String {
+    let tool = (input["tool_name"] as? String) ?? "工具"
+    let args = (input["tool_input"] as? [String: Any]) ?? [:]
+    var what = ""
+    if let cmd = args["command"] as? String {
+        what = cmd
+    } else if let q = args["question"] as? String {
+        what = q
+    } else if let fp = args["file_path"] as? String {
+        what = (fp as NSString).lastPathComponent
+    } else if let plan = args["plan"] as? String {
+        what = plan
+    } else if let pattern = args["pattern"] as? String {
+        what = pattern
+    } else if let url = args["url"] as? String {
+        what = url
+    }
+    what = what.replacingOccurrences(of: "\n", with: " ")
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+    if what.isEmpty { return "等待批准：\(tool)" }
+    return String(("等待批准：\(tool) · \(what)").prefix(80))
+}
+
 func claudeEvent(_ input: [String: Any]) -> [String: Any]? {
     let event = (input["hook_event_name"] as? String) ?? ""
     let kind: String
     switch event {
     case "Stop": kind = "done"
-    case "Notification": kind = "needs"
-    case "SessionStart", "UserPromptSubmit": kind = "working"
+    case "Notification", "PermissionRequest": kind = "needs"
+    case "SessionStart", "UserPromptSubmit", "PostToolUse": kind = "working"
     case "SessionEnd": kind = "gone"
     default: return nil
     }
@@ -222,10 +246,13 @@ func claudeEvent(_ input: [String: Any]) -> [String: Any]? {
         detail = lastAssistantText(input["transcript_path"] as? String)
     } else if event == "Notification" {
         detail = String(((input["message"] as? String) ?? "").prefix(80))
+    } else if event == "PermissionRequest" {
+        detail = approvalDetail(input)
     }
     return [
         "v": 1, "agent": "claude", "kind": kind,
-        "title": sessionTitle(input["transcript_path"] as? String),
+        // PostToolUse 每个工具调用都会触发，没必要每次都读 96KB transcript 取名字
+        "title": event == "PostToolUse" ? "" : sessionTitle(input["transcript_path"] as? String),
         "sessionId": (input["session_id"] as? String) ?? "",
         "cwd": (input["cwd"] as? String) ?? FileManager.default.currentDirectoryPath,
         "detail": detail, "host": host, "bundleId": bundle, "tty": ttyName(),
@@ -249,7 +276,7 @@ func codexEvent(_ raw: String) -> [String: Any]? {
 
 // MARK: - 安装 / 移除 Claude Code hooks（用 Swift 做，避免依赖 python3）
 
-let HOOK_EVENTS = ["Stop", "Notification", "SessionStart", "SessionEnd"]
+let HOOK_EVENTS = ["Stop", "Notification", "PermissionRequest", "SessionStart", "PostToolUse", "SessionEnd"]
 
 func homeDir() -> String {
     // NSHomeDirectory() 不认 $HOME，测试/多用户场景要显式优先

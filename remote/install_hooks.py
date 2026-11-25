@@ -14,7 +14,7 @@ SPOOL = ("python3 -c \"import sys,json,os;"
          "e=json.load(sys.stdin);"
          "e['_tp']=os.environ.get('TERM_PROGRAM','');"
          "open(p,'a').write(json.dumps(e,ensure_ascii=False)+chr(10))\"")
-EVENTS = ["Stop", "Notification", "SessionStart", "SessionEnd"]
+EVENTS = ["Stop", "Notification", "PermissionRequest", "SessionStart", "PostToolUse", "SessionEnd"]
 MARK = "agentdone"
 
 

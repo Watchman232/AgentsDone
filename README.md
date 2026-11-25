@@ -7,7 +7,7 @@
 - 常驻 **21 MB** 内存，无网络请求，全部本地
 - 菜单栏一个 🔔 + 数字；完成瞬间顶部弹一枚胶囊 + 轻提示音
 - 点一行 → 跳回那个 App（VS Code / iTerm / Terminal / Codex 桌面 / Harness / ZCode）并把该行消掉
-- **Codex / DeepSeek Harness / ZCode 零配置**（直接读它们各自的本地会话数据）；Claude Code 只需合并 4 个 hook
+- **Codex / DeepSeek Harness / ZCode 零配置**（直接读它们各自的本地会话数据）；Claude Code 只需合并 6 个 hook
 
 ![菜单栏列表](docs/panel.png)
 
@@ -17,7 +17,7 @@
 
 | 场景 | 是否需要配置 | 说明 |
 |---|---|---|
-| Claude Code CLI（Terminal / iTerm / Warp / Ghostty / VS Code 集成终端） | 安装脚本自动写入 hooks | `Stop`→完成、`Notification`→需要你、`SessionEnd`→移除；宿主由 `TERM_PROGRAM` 判定 |
+| Claude Code CLI（Terminal / iTerm / Warp / Ghostty / VS Code 集成终端） | 安装脚本自动写入 hooks | `Stop`→完成、`PermissionRequest`→需要你（审批弹窗）、`PostToolUse`→运行中、`SessionEnd`→移除；宿主由 `TERM_PROGRAM` 判定 |
 | Claude Code VS Code 扩展（`anthropic.claude-code`） | 同上（扩展跑的就是同一个 CLI，用户级 hooks 始终加载） | 宿主由 `CLAUDE_CODE_ENTRYPOINT=claude-vscode` 判定，比进程树更可靠 |
 | Claude 桌面 App | 同上 | 宿主由 `CLAUDE_CODE_ENTRYPOINT=claude-desktop` 判定 |
 | Codex CLI | 不需要 | 监听 `~/.codex/sessions/**/rollout-*.jsonl` 的 `task_complete`；`originator` 含 `cli` → 宿主显示"终端" |
@@ -66,7 +66,7 @@ Codex 插件同理：它写的是同一份 `~/.codex/sessions/**/rollout-*.jsonl
 
 ### 会话结束时发生了什么
 
-- 覆盖它的是三件事：`Stop`（完成）、`Notification`（需要你）、`SessionEnd`（会话关闭）
+- 覆盖它的是这几件事：`Stop`（完成）、`PermissionRequest` / `Notification`（需要你）、`PostToolUse`（批准后继续跑）、`SessionEnd`（会话关闭）
 - `SessionEnd` 只在**还没有结论**（运行中）时才删掉那一行
 - 已经有结果（完成/需要你）的，即使会话关闭也**保留** —— 否则像 `claude -p "..."` 这种一次跑完立刻退出的场景，
   完成和关闭只隔几十毫秒，提醒会被立刻抹掉（v0.2.1 修的就是这个）
@@ -75,6 +75,29 @@ Codex 插件同理：它写的是同一份 `~/.codex/sessions/**/rollout-*.jsonl
 
 按优先级：`CLAUDE_CODE_ENTRYPOINT`（扩展/桌面自己声明）→ `TERM_PROGRAM`（集成终端）→ 进程祖先链里的 `.app` → `__CFBundleIdentifier` → 兜底"终端"。
 所以同一个 CLI，在 VS Code 扩展里跑、在集成终端里跑、在 iTerm 里跑，跳转目标都不会错。
+
+## 等你批准时也会提醒
+
+Claude Code 需要你批准某个操作（比如 `git push`、写工作区外的文件）时会弹出审批框，
+这时 AgentDone 会立刻亮起"需要你"，摘要直接写清楚要批什么：
+
+```
+等待批准：Bash · git push origin main
+等待批准：Write · config.yaml
+```
+
+实现上用的是 `PermissionRequest` hook（审批弹窗一出现就触发，不用等 `Notification` 那几秒），
+批准后 `PostToolUse` 立刻把它翻回"运行中"，所以那一行会自己消失，不会一直挂着。
+
+**其它 Agent 目前没有这个能力**，因为它们的本地数据里没有"等待批准"这个状态：
+
+| Agent | 为什么做不到 |
+|---|---|
+| Codex | rollout 只记录 `task_started`/`task_complete`/`item_completed`，审批走扩展与 app-server 之间的 IPC，不落盘 |
+| DeepSeek Harness | `approvalState` 投影只存审批策略和"轮次是否打开"，待批请求只在运行时视图里，不落盘；完整会话日志是 zstd 压缩 |
+| ZCode | tasks 表只有任务状态（跑完/出错），没有审批态 |
+
+对这三种，卡在审批时它们只是"日志不再增长"，AgentDone 看到的就是一直在跑 —— 也就不会提醒。
 
 ## 远程集群（VS Code Remote-SSH / devspace）
 
@@ -93,7 +116,7 @@ Codex 插件同理：它写的是同一份 `~/.codex/sessions/**/rollout-*.jsonl
 
 - **Codex（远端）**：远端跑一小段 python（从 ssh 的 stdin 送进去），增量读
   `~/.codex/sessions/**/rollout-*.jsonl` 的新增字节，只把 `task_started` / `task_complete` 两行发回来
-- **Claude（远端）**：设置页往远端 `~/.claude/settings.json` 合并 4 个 hook，命令是一条内联 `python3 -c`，
+- **Claude（远端）**：设置页往远端 `~/.claude/settings.json` 合并 6 个 hook，命令是一条内联 `python3 -c`，
   **远端不落地任何脚本文件**；hook 把事件追加到 `~/.agentdone/spool.jsonl`，同一段 python 读它
 - **摘要**：远端 transcript 的解析也在远端做，只回传最后一条助手消息的前 80 字
 
@@ -123,7 +146,7 @@ cd agentdone
 要求：macOS 12 或更高（Intel / Apple Silicon 都可以）。
 
 脚本会：编译 App → 装到 `~/Applications/AgentDone.app` → 装 hook 到 `~/.agentdone/` →
-把 4 个 hook 合并进 `~/.claude/settings.json`（先备份，保留你已有的其它 hook）→
+把 6 个 hook 合并进 `~/.claude/settings.json`（先备份，保留你已有的其它 hook）→
 注册登录自启（`~/Library/LaunchAgents/dev.agentdone.app.plist`）。
 
 想把整个工具发给别人：**把整个 `agentdone/` 文件夹（含 `vendor/`）拷过去**，对方跑 `./install.sh` 就行。

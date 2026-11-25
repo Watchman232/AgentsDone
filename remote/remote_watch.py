@@ -46,6 +46,23 @@ def read_new(path, off):
         return off, b""
 
 
+def approval_detail(ev):
+    """「等待批准：Bash · git push」——远端也要能看出批的是什么"""
+    if not ev.get("tool_name"):
+        return ""
+    tool = ev.get("tool_name") or "工具"
+    args = ev.get("tool_input") or {}
+    what = ""
+    for key in ("command", "question", "file_path", "plan", "pattern", "url"):
+        if args.get(key):
+            what = str(args[key])
+            break
+    if what and "/" in what and len(what) > 60:
+        what = os.path.basename(what.rstrip("/"))
+    what = re.sub(r"\s+", " ", what).strip()
+    return ("等待批准：%s · %s" % (tool, what))[:80] if what else ("等待批准：%s" % tool)
+
+
 def clean_title(raw):
     """去掉「引用别的会话」等噪声：扩展常把 [Chat thread](codex://threads/<uuid>) 写成首条消息"""
     if not raw:
@@ -184,7 +201,10 @@ def claude_title(path):
 CLAUDE_KIND = {
     "Stop": "done",
     "Notification": "needs",
+    "PermissionRequest": "needs",
     "SessionStart": "working",
+    "UserPromptSubmit": "working",
+    "PostToolUse": "working",
     "SessionEnd": "gone",
 }
 
@@ -240,7 +260,7 @@ def scan(emit):
         detail = ""
         if kind in ("done", "needs"):
             if kind == "needs":
-                detail = (ev.get("message") or "")[:80]
+                detail = approval_detail(ev) or (ev.get("message") or "")[:80]
             if not detail:
                 detail = last_assistant(ev.get("transcript_path") or "")
         out({"agent": "claude", "kind": kind,
