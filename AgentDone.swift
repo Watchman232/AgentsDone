@@ -2255,9 +2255,9 @@ enum Snapshot {
                       project: "mf-duplexDemo", title: "修复训练管道的重试逻辑",
                       detail: "远端跑完了：修好了数据管道的重试逻辑", host: "VS Code（远程）",
                       bundleId: "com.microsoft.VSCode"),
-            HookEvent(agent: "dsh", kind: "done", sessionId: "e", cwd: "/Users/me/work/agent-core",
+            HookEvent(agent: "dsh", kind: "needs", sessionId: "e", cwd: "/Users/me/work/agent-core",
                       project: "agent-core", title: "把重试逻辑挪到适配层",
-                      detail: "把重试逻辑挪到适配层，补了 4 个用例", host: "DeepSeek Harness",
+                      detail: "等待批准：bash · 安装依赖到系统目录", host: "DeepSeek Harness",
                       bundleId: "com.deepseek.dsh"),
             HookEvent(agent: "zcode", kind: "needs", sessionId: "f", cwd: "/Users/me/work/admin-panel",
                       project: "admin-panel", title: "实现登录页",
@@ -2277,7 +2277,7 @@ enum Snapshot {
         for e in samples { store.ingest(e) }
         _ = now
         let view = NSHostingView(rootView: PanelView(store: store, onJump: { _ in }, onClear: {}, onMute: {}))
-        view.frame = NSRect(x: 0, y: 0, width: 340, height: 300)
+        view.frame = NSRect(x: 0, y: 0, width: 340, height: 460)
         view.layoutSubtreeIfNeeded()
         let size = view.fittingSize
         view.frame = NSRect(origin: .zero, size: CGSize(width: 340, height: max(size.height, 220)))
