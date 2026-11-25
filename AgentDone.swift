@@ -44,6 +44,7 @@ func agentLabel(_ a: String) -> String {
     case "opencode": return "OpenCode"
     case "dsh": return "DeepSeek Harness"
     case "zcode": return "ZCode"
+    case "antigravity": return "Antigravity"
     default: return a.capitalized
     }
 }
@@ -54,6 +55,7 @@ func agentInitial(_ a: String) -> String {
     case "codex": return "X"
     case "dsh": return "D"
     case "zcode": return "Z"
+    case "antigravity": return "A"
     default: return String(agentLabel(a).prefix(1))
     }
 }
@@ -64,6 +66,7 @@ func agentColor(_ a: String) -> Color {
     case "codex": return Color(red: 0.30, green: 0.55, blue: 0.95)
     case "dsh": return Color(red: 0.30, green: 0.42, blue: 0.98)
     case "zcode": return Color(red: 0.10, green: 0.60, blue: 0.55)
+    case "antigravity": return Color(red: 0.35, green: 0.62, blue: 0.86)
     default: return Color(red: 0.45, green: 0.45, blue: 0.50)
     }
 }
@@ -681,6 +684,219 @@ final class ZCodeWatcher {
     }
 }
 
+
+// MARK: - Antigravity 监听（读 ~/.gemini/antigravity 的会话索引）
+
+/// Antigravity（Google 的 agent IDE）把每个会话写成 `conversations/<id>.db`，
+/// 索引在 `conversation_summaries.db`。状态的数字是 protobuf 枚举：
+/// 1 PENDING / 2 RUNNING / 3 DONE / 6 CANCELED / 7 ERROR / 8 GENERATING / 9 WAITING / 11 QUEUED / 12 INTERRUPTED
+/// 其中 **WAITING(9) 就是"等你批准/回答"**。
+final class AntigravityWatcher {
+    private let dir: String
+    private var stream: FSEventStreamRef?
+    private var timer: DispatchSourceTimer?
+    private var last: [String: String] = [:]
+    private var primed = false
+    var onEvent: ((HookEvent) -> Void)?
+
+    init(root: String? = nil) {
+        if let root { dir = root }
+        else if let env = ProcessInfo.processInfo.environment["AGENTDONE_ANTIGRAVITY_ROOT"], !env.isEmpty { dir = env }
+        else { dir = NSHomeDirectory() + "/.gemini/antigravity" }
+    }
+
+    func start() {
+        guard FileManager.default.fileExists(atPath: dir) else { return }
+        scan(emit: false)
+        primed = true
+
+        var ctx = FSEventStreamContext(version: 0,
+                                       info: Unmanaged.passUnretained(self).toOpaque(),
+                                       retain: nil, release: nil, copyDescription: nil)
+        let flags = UInt32(kFSEventStreamCreateFlagFileEvents | kFSEventStreamCreateFlagNoDefer)
+        stream = FSEventStreamCreate(nil, { _, info, numEvents, paths, _, _ in
+            guard let info else { return }
+            // App 会频繁写 cache/cookie，那些跟会话无关；只看 sqlite
+            var relevant = false
+            let list = paths.assumingMemoryBound(to: UnsafePointer<CChar>?.self)
+            for i in 0..<Int(numEvents) {
+                guard let cstr = list[i] else { continue }
+                let p = String(cString: cstr)
+                if p.hasSuffix(".db") || p.hasSuffix(".db-wal") || p.hasSuffix(".db-shm") {
+                    relevant = true; break
+                }
+            }
+            guard relevant else { return }
+            Unmanaged<AntigravityWatcher>.fromOpaque(info).takeUnretainedValue().scan(emit: true)
+        }, &ctx, [dir] as CFArray, FSEventStreamEventId(kFSEventStreamEventIdSinceNow), 0.5, flags)
+        if let stream {
+            FSEventStreamSetDispatchQueue(stream, DispatchQueue(label: "agentdone.antigravity"))
+            FSEventStreamStart(stream)
+        }
+
+        // sqlite 的 WAL 落盘不一定会触发 FSEvent，再兜一层轮询
+        let t = DispatchSource.makeTimerSource(queue: DispatchQueue(label: "agentdone.antigravity.poll"))
+        t.schedule(deadline: .now() + 2, repeating: 3)
+        t.setEventHandler { [weak self] in
+            guard let self, self.touched() else { return }
+            self.scan(emit: true)
+        }
+        t.resume()
+        timer = t
+    }
+
+    private var stamps: [String: String] = [:]
+
+    /// 库文件有没有变（比每次都开库便宜得多）
+    private func touched() -> Bool {
+        var paths = [dir + "/conversation_summaries.db"]
+        if let names = try? FileManager.default.contentsOfDirectory(atPath: dir + "/conversations") {
+            for n in names where n.hasSuffix(".db") { paths.append(dir + "/conversations/" + n) }
+        }
+        var changed = false
+        for path in paths {
+            let attrs = try? FileManager.default.attributesOfItem(atPath: path)
+            let size = (attrs?[.size] as? Int) ?? -1
+            let mt = (attrs?[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0
+            let sig = "\(size)@\(mt)"
+            if stamps[path] != sig { stamps[path] = sig; changed = true }
+        }
+        return changed
+    }
+
+    /// mode=ro 在 WAL 库上可能失败，退回 immutable
+    private func openRO(_ path: String) -> OpaquePointer? {
+        guard FileManager.default.fileExists(atPath: path) else { return nil }
+        for uri in ["file:\(path)?mode=ro", "file:\(path)?immutable=1"] {
+            var db: OpaquePointer?
+            if sqlite3_open_v2(uri, &db, SQLITE_OPEN_READONLY | SQLITE_OPEN_URI, nil) == SQLITE_OK, let db {
+                sqlite3_busy_timeout(db, 200)
+                return db
+            }
+            if let db { sqlite3_close(db) }
+        }
+        return nil
+    }
+
+    private struct Meta {
+        var title = ""
+        var status = ""
+        var killed = false
+        var mtime = Date.distantPast
+    }
+
+    private func summaries() -> [String: Meta] {
+        var out: [String: Meta] = [:]
+        guard let db = openRO(dir + "/conversation_summaries.db") else { return out }
+        defer { sqlite3_close(db) }
+        let sql = """
+        select conversation_id, coalesce(nullif(title,''), coalesce(preview,'')), coalesce(status,''),
+               coalesce(killed,0), coalesce(last_modified_time,'')
+        from conversation_summaries;
+        """
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return out }
+        defer { sqlite3_finalize(stmt) }
+        let fmt = ISO8601DateFormatter()
+        fmt.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let fmt2 = ISO8601DateFormatter()
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            func col(_ i: Int32) -> String {
+                sqlite3_column_text(stmt, i).map { String(cString: $0) } ?? ""
+            }
+            let id = col(0)
+            guard !id.isEmpty else { continue }
+            var m = Meta()
+            m.title = col(1).replacingOccurrences(of: "\n", with: " ")
+            m.status = col(2)
+            m.killed = sqlite3_column_int(stmt, 3) != 0
+            let ts = col(4)
+            m.mtime = fmt.date(from: ts) ?? fmt2.date(from: ts) ?? Date.distantPast
+            out[id] = m
+        }
+        return out
+    }
+
+    /// 最后一步的状态：3=DONE 7=ERROR 9=WAITING …
+    private func lastStep(_ id: String) -> (status: Int32, error: String) {
+        let path = dir + "/conversations/" + id + ".db"
+        guard let db = openRO(path) else { return (-1, "") }
+        defer { sqlite3_close(db) }
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, "select status, coalesce(error_details,'') from steps order by idx desc limit 1;",
+                                 -1, &stmt, nil) == SQLITE_OK else { return (-1, "") }
+        defer { sqlite3_finalize(stmt) }
+        guard sqlite3_step(stmt) == SQLITE_ROW else { return (-1, "") }
+        let err = sqlite3_column_text(stmt, 1).map { String(cString: $0) } ?? ""
+        return (sqlite3_column_int(stmt, 0), err)
+    }
+
+    /// 最后一轮 agent 说了什么（FTS 里存的是可读文本）
+    private func detailTail(_ id: String) -> String {
+        guard let db = openRO(dir + "/conversation_summaries.db") else { return "" }
+        defer { sqlite3_close(db) }
+        let sql = """
+        select agent_body from conversations_fts
+        where conversation_id = ? and chunk_index >= 0 order by chunk_index desc limit 1;
+        """
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return "" }
+        defer { sqlite3_finalize(stmt) }
+        sqlite3_bind_text(stmt, 1, id, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self))
+        guard sqlite3_step(stmt) == SQLITE_ROW,
+              let cstr = sqlite3_column_text(stmt, 0) else { return "" }
+        let body = String(cString: cstr)
+        let lines = body.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty && !$0.hasPrefix("*") && !$0.hasPrefix("#") && !$0.hasPrefix("|") }
+        guard let tail = lines.last else { return "" }
+        let plain = tail.replacingOccurrences(of: "**", with: "")
+            .replacingOccurrences(of: "`", with: "")
+            .replacingOccurrences(of: ">", with: "")
+            .trimmingCharacters(in: .whitespaces)
+        return String(plain.prefix(80))
+    }
+
+    private func scan(emit: Bool) {
+        let all = summaries()
+        for (id, m) in all {
+            // 会话级状态：优先看最后一步
+            let (stepStatus, err) = lastStep(id)
+            let running = m.status.contains("RUNNING") || m.status.contains("BUSY")
+
+            var state = "done"
+            var detail = ""
+            switch stepStatus {
+            case 9:                       // WAITING：等你批准或回答
+                state = "needs"
+                detail = "等待你在 Antigravity 里确认"
+            case 1, 2, 8, 11:             // PENDING / RUNNING / GENERATING / QUEUED
+                state = "working"
+            case 7:                       // ERROR
+                state = "needs"
+                let e = err.replacingOccurrences(of: "\n", with: " ").trimmingCharacters(in: .whitespaces)
+                detail = e.isEmpty ? "任务出错" : String(e.prefix(80))
+            case 6, 12:                   // CANCELED / INTERRUPTED
+                state = "done"
+                detail = "已中断"
+            default:                      // DONE / 未知
+                state = running ? "working" : "done"
+                if state == "done" { detail = detailTail(id) }
+            }
+            if m.killed { continue }
+            if running && state == "done" { state = "working" }   // 索引说还在跑就别报完成
+
+            let previous = last[id]
+            last[id] = state
+            guard emit, primed, previous != state else { continue }
+            let title = m.title.isEmpty ? "" : String(m.title.prefix(60))
+            let ev = HookEvent(agent: "antigravity", kind: state, sessionId: id, cwd: "",
+                               project: "Antigravity", title: title,
+                               detail: String(detail.prefix(80)),
+                               host: "Antigravity", bundleId: "com.google.antigravity")
+            DispatchQueue.main.async { self.onEvent?(ev) }
+        }
+    }
+}
 
 // MARK: - 配置：远程主机（~/.agentdone/config.json）
 
@@ -1362,9 +1578,9 @@ struct PanelView: View {
 
             if store.sessions.isEmpty {
                 VStack(spacing: 6) {
-                    Text("还没有会话")
-                        .font(.system(size: 12)).foregroundStyle(.secondary)
-                    Text("在 Claude Code、Codex、DeepSeek Harness 或 ZCode 里发一条消息试试")
+                    Text("今日宜休息")
+                        .font(.system(size: 13, weight: .medium)).foregroundStyle(.secondary)
+                    Text("没有会话在跑，喝口水吧")
                         .font(.system(size: 10)).foregroundStyle(.tertiary)
                 }
                 .frame(maxWidth: .infinity).padding(.vertical, 30)
@@ -1493,6 +1709,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var codex: CodexWatcher?
     var dsh: DSHWatcher?
     var zcode: ZCodeWatcher?
+    var antigravity: AntigravityWatcher?
     var remote: RemoteWatcher?
     var statusItem: NSStatusItem!
     var popover: NSPopover?
@@ -1537,6 +1754,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         z.onEvent = { [weak self] ev in self?.handle(ev) }
         z.start()
         zcode = z
+
+        let ag = AntigravityWatcher()
+        ag.onEvent = { [weak self] ev in self?.handle(ev) }
+        ag.start()
+        antigravity = ag
     }
 
     func anotherInstanceRunning() -> Bool {
@@ -1628,6 +1850,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 // MARK: - 预览图渲染（--snapshot）
 
 enum Snapshot {
+    static func renderEmpty(path: String) {
+        let store = Store()
+        let view = NSHostingView(rootView: PanelView(store: store, onJump: { _ in }, onClear: {}, onMute: {}))
+        view.frame = NSRect(x: 0, y: 0, width: 340, height: 160)
+        view.layoutSubtreeIfNeeded()
+        let size = view.fittingSize
+        view.frame = NSRect(origin: .zero, size: CGSize(width: 340, height: max(size.height, 150)))
+        view.layoutSubtreeIfNeeded()
+        guard let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return }
+        view.cacheDisplay(in: view.bounds, to: rep)
+        guard let png = rep.representation(using: .png, properties: [:]) else { return }
+        try? png.write(to: URL(fileURLWithPath: path))
+        print("snapshot -> \(path)")
+    }
+
     static func render(path: String) {
         let store = Store()
         let now = Date()
@@ -1653,6 +1890,10 @@ enum Snapshot {
                       project: "api-server", title: "把限流挪到网关层",
                       detail: "等待批准：Bash · git push origin main",
                       host: "iTerm", bundleId: "com.googlecode.iterm2"),
+            HookEvent(agent: "antigravity", kind: "needs", sessionId: "k", cwd: "",
+                      project: "Antigravity", title: "把 CertMem 的权限模型讲清楚",
+                      detail: "等待你在 Antigravity 里确认", host: "Antigravity",
+                      bundleId: "com.google.antigravity"),
             HookEvent(agent: "codex", kind: "working", sessionId: "i", cwd: "/Users/me/work/agent-core",
                       project: "agent-core", title: "重写评测脚本支持多卡并行",
                       detail: "", host: "VS Code（远程）", bundleId: "com.microsoft.VSCode"),
@@ -1716,6 +1957,9 @@ struct AgentDoneMain {
         if let i = args.firstIndex(of: "--snapshot-settings"), i + 1 < args.count {
             Snapshot.renderSettings(path: args[i + 1])
             exit(0)
+        }
+        if let i = args.firstIndex(of: "--snapshot-empty"), i + 1 < args.count {
+            Snapshot.renderEmpty(path: args[i + 1]); exit(0)
         }
         if let i = args.firstIndex(of: "--snapshot-pill"), i + 1 < args.count {
             Snapshot.renderPill(path: args[i + 1]); exit(0)

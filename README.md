@@ -13,6 +13,10 @@
 
 ![完成胶囊](docs/pill.png)
 
+没有会话时是这样：
+
+![今日宜休息](docs/empty.png)
+
 ## 它覆盖什么
 
 | 场景 | 是否需要配置 | 说明 |
@@ -24,6 +28,7 @@
 | Codex VS Code 扩展（`openai.codex`） | 不需要 | 同上，扩展写同一份日志；`originator` 含 `vscode` → 宿主显示 VS Code |
 | Codex 桌面 App（ChatGPT.app 内的 Codex） | 不需要 | 同上，`originator: Codex Desktop` / `codex_work_desktop` → 宿主显示"Codex 桌面" |
 | DeepSeek Harness | 不需要 | 读 `~/.dsh/storages/session_projcache`，用 `turnBoundary.openTurnStartSeq` 判断回合是否结束 |
+| Antigravity（Google 的 agent IDE） | 不需要 | 读 `~/.gemini/antigravity`：`conversation_summaries.db` 给标题和运行状态，`conversations/<id>.db` 的 `steps.status` 给细状态（`WAITING` 就是等你确认） |
 | ZCode（智谱 GLM 桌面 IDE） | 不需要 | 读 `~/.zcode/v2/tasks-index.sqlite`，`task_status` 由空变 `completed` 即为完成，`error` 记为"需要你" |
 | **远程集群**（VS Code Remote-SSH / devspace 里的 Codex、Claude） | 菜单栏 → 设置 → 勾选主机 | 见下面「远程集群」一节 |
 
@@ -72,6 +77,19 @@ Codex 插件同理：它写的是同一份 `~/.codex/sessions/**/rollout-*.jsonl
 
 **只有跑完和需要你才响铃/浮窗**，运行中静默 —— 不然每开一个会话都被打扰。
 超过 6 小时没有任何动静的会话会自动清掉（运行中的也算），不会越堆越多。
+
+### Antigravity 的三种状态怎么来的
+
+| 字段 | 位置 | 用途 |
+|---|---|---|
+| `conversation_summaries.title` | `conversation_summaries.db` | 会话名（就是 IDE 里显示的那个） |
+| `conversation_summaries.status` | 同上 | `RUNNING`/`BUSY` → 运行中；`IDLE` → 已结束 |
+| `steps.status`（最后一步） | `conversations/<id>.db` | `WAITING(9)` → 待确认、`ERROR(7)` → 出错、`DONE(3)` → 完成 |
+| `conversations_fts.agent_body` | `conversation_summaries.db` | 最后一轮回复的末句，做摘要 |
+
+这些数字是 protobuf 枚举，从 App 里的 `language_server` 二进制按
+`EnumValueDescriptorProto`（名字后紧跟 `0x10 <编号>`）解出来的：
+`1 PENDING / 2 RUNNING / 3 DONE / 6 CANCELED / 7 ERROR / 8 GENERATING / 9 WAITING / 11 QUEUED / 12 INTERRUPTED`。
 
 ### 会话结束时发生了什么
 
