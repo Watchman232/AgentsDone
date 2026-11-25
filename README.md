@@ -208,6 +208,65 @@ cd agentdone
 - **清除**：清掉已完成的；**静音**：不再弹胶囊和响铃（列表照常更新）
 - 列表里超过 6 小时的条目自动清理
 
+## 数据目录可配置
+
+默认情况下 AgentDone 按各家 Agent 的默认位置去找会话数据。如果你改过它们的
+`CODEX_HOME`、把 `~/.claude` 挪了盘、或用的是便携版，需要在配置文件里指一下。
+
+配置文件：`~/.agentdone/config.json`（菜单栏 → 设置 → 「数据目录」右侧的「打开配置文件」）
+
+```json
+{
+  "paths": {
+    "claude": "~/.claude",
+    "codex": "~/codex-home",
+    "dsh": "/Volumes/Data/dsh",
+    "zcode": "~/.zcode/v2",
+    "antigravity": "~/.gemini/antigravity"
+  }
+}
+```
+
+| 键 | 默认值 | 实际读取 |
+|---|---|---|
+| `claude` | `~/.claude` | `settings.json`（安装/卸载 hooks 时写入这里） |
+| `codex` | `~/.codex` | `<codex>/sessions/**/rollout-*.jsonl` 和 `<codex>/state_*.sqlite`（会话名） |
+| `dsh` | `~/.dsh` | `<dsh>/storages/session_projcache/sessions/*.json` |
+| `zcode` | `~/.zcode/v2` | `<zcode>/tasks-index.sqlite` |
+| `antigravity` | `~/.gemini/antigravity` | 里面的 `conversation_summaries.db` 和 `conversations/<id>.db` |
+
+说明：
+
+- 支持 `~` 开头，也支持绝对路径；**没写的键用默认值**，不是一份全量清单
+- 改完保存即生效（3 秒内自动重载数据目录），不用重启 App
+- 路径写错不会报错，只是那个 Agent 静默地不出现 —— 设置页里能看到当前实际生效的路径
+- Claude 还额外认官方的 `CLAUDE_CONFIG_DIR`（优先级高于配置文件）
+- 这几个目录的**上一级**才是配置对象：`codex` 指到 `CODEX_HOME`，不是 `sessions`
+
+不确定现在到底读的是哪个目录时，直接问它：
+
+```bash
+~/Applications/AgentDone.app/Contents/MacOS/AgentDone --paths
+```
+
+```
+config: /Users/you/.agentdone/config.json
+claude       /Users/you/.claude
+codex        /tmp/fakecodex2          ← 配置生效
+dsh          /Users/you/.dsh
+...
+codex sessions: /tmp/fakecodex2/sessions
+```
+
+给测试/多实例用的环境变量（优先级最高，日常不用管）：
+
+```bash
+AGENTDONE_CODEX_HOME=~/tmp/codex-home ./build/AgentDone    # 普通覆盖
+AGENTDONE_CODEX_ROOT=/tmp/x/sessions ./build/AgentDone     # 直接指定 sessions 目录
+AGENTDONE_DSH_HOME / AGENTDONE_DSH_ROOT / AGENTDONE_ZCODE_ROOT / AGENTDONE_ANTIGRAVITY_ROOT
+AGENTDONE_CLAUDE_ROOT / AGENTDONE_SOCK / AGENTDONE_CONFIG_DIR
+```
+
 ## 卸载
 
 ```bash

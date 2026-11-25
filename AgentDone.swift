@@ -226,7 +226,7 @@ final class EventServer {
 enum CodexTitle {
     static var home: String {
         if let e = ProcessInfo.processInfo.environment["AGENTDONE_CODEX_DB"], !e.isEmpty { return e }
-        return NSHomeDirectory() + "/.codex"
+        return AgentPaths.base("codex")
     }
 
     /// state_N.sqlite 会随版本升级，取编号最大的那个
@@ -366,9 +366,13 @@ final class CodexWatcher {
     var onEvent: ((HookEvent) -> Void)?
 
     init(root: String? = nil) {
-        if let root { self.root = root }
-        else if let env = ProcessInfo.processInfo.environment["AGENTDONE_CODEX_ROOT"] { self.root = env }
-        else { self.root = NSString(string: "~/.codex/sessions").expandingTildeInPath }
+        if let root { self.root = root } else { self.root = AgentPaths.codexSessions() }
+    }
+
+    func stop() {
+        guard let stream else { return }
+        FSEventStreamStop(stream); FSEventStreamInvalidate(stream); FSEventStreamRelease(stream)
+        self.stream = nil
     }
 
     func start() {
@@ -525,9 +529,13 @@ final class DSHWatcher {
     var onEvent: ((HookEvent) -> Void)?
 
     init(root: String? = nil) {
-        if let root { self.root = root }
-        else if let env = ProcessInfo.processInfo.environment["AGENTDONE_DSH_ROOT"] { self.root = env }
-        else { self.root = NSHomeDirectory() + "/.dsh/storages/session_projcache/sessions" }
+        if let root { self.root = root } else { self.root = AgentPaths.dshSessions() }
+    }
+
+    func stop() {
+        guard let stream else { return }
+        FSEventStreamStop(stream); FSEventStreamInvalidate(stream); FSEventStreamRelease(stream)
+        self.stream = nil
     }
 
     func start() {
@@ -613,12 +621,15 @@ final class ZCodeWatcher {
     var onEvent: ((HookEvent) -> Void)?
 
     init(root: String? = nil) {
-        let base: String
-        if let root { base = root }
-        else if let env = ProcessInfo.processInfo.environment["AGENTDONE_ZCODE_ROOT"] { base = env }
-        else { base = NSHomeDirectory() + "/.zcode/v2" }
+        let base = root ?? AgentPaths.base("zcode")
         self.dir = base
         self.dbPath = base + "/tasks-index.sqlite"
+    }
+
+    func stop() {
+        guard let stream else { return }
+        FSEventStreamStop(stream); FSEventStreamInvalidate(stream); FSEventStreamRelease(stream)
+        self.stream = nil
     }
 
     func start() {
@@ -700,9 +711,15 @@ final class AntigravityWatcher {
     var onEvent: ((HookEvent) -> Void)?
 
     init(root: String? = nil) {
-        if let root { dir = root }
-        else if let env = ProcessInfo.processInfo.environment["AGENTDONE_ANTIGRAVITY_ROOT"], !env.isEmpty { dir = env }
-        else { dir = NSHomeDirectory() + "/.gemini/antigravity" }
+        dir = root ?? AgentPaths.base("antigravity")
+    }
+
+    func stop() {
+        if let stream {
+            FSEventStreamStop(stream); FSEventStreamInvalidate(stream); FSEventStreamRelease(stream)
+            self.stream = nil
+        }
+        timer?.cancel(); timer = nil
     }
 
     func start() {
@@ -909,10 +926,33 @@ struct RemoteEntry: Codable, Identifiable, Equatable {
 struct AppConfig: Codable {
     var followVSCode: Bool = true
     var hosts: [RemoteEntry] = []
+    /// 各 Agent 的数据目录，键：claude / codex / dsh / zcode / antigravity
+    var paths: [String: String] = [:]
+
+    init() {}
+
+    init(followVSCode: Bool, hosts: [RemoteEntry], paths: [String: String] = [:]) {
+        self.followVSCode = followVSCode
+        self.hosts = hosts
+        self.paths = paths
+    }
+
+    /// 手写解码：允许只写想要的那几个键（合成的 decoder 遇到缺键会整体失败）
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        followVSCode = try c.decodeIfPresent(Bool.self, forKey: .followVSCode) ?? true
+        hosts = try c.decodeIfPresent([RemoteEntry].self, forKey: .hosts) ?? []
+        paths = try c.decodeIfPresent([String: String].self, forKey: .paths) ?? [:]
+    }
 }
 
 enum ConfigStore {
-    static var dir: String { NSHomeDirectory() + "/.agentdone" }
+    static var dir: String {
+        if let e = ProcessInfo.processInfo.environment["AGENTDONE_CONFIG_DIR"], !e.isEmpty {
+            return AgentPaths.expand(e)
+        }
+        return NSHomeDirectory() + "/.agentdone"
+    }
     static var path: String { dir + "/config.json" }
 
     static func load() -> AppConfig {
@@ -927,6 +967,60 @@ enum ConfigStore {
         enc.outputFormatting = [.prettyPrinted, .sortedKeys]
         guard let d = try? enc.encode(c) else { return }
         try? d.write(to: URL(fileURLWithPath: path))
+    }
+}
+
+/// 各 Agent 数据目录：环境变量（测试用）> config.json 的 paths > 默认值
+enum AgentPaths {
+    static let defaults: [String: String] = [
+        "claude": "~/.claude",
+        "codex": "~/.codex",
+        "dsh": "~/.dsh",
+        "zcode": "~/.zcode/v2",
+        "antigravity": "~/.gemini/antigravity",
+    ]
+
+    static var labels: [(key: String, title: String)] {
+        [("claude", "Claude Code"), ("codex", "Codex"), ("dsh", "DeepSeek Harness"),
+         ("zcode", "ZCode"), ("antigravity", "Antigravity")]
+    }
+
+    static func expand(_ p: String) -> String {
+        if p == "~" { return NSHomeDirectory() }
+        if p.hasPrefix("~/") { return NSHomeDirectory() + String(p.dropFirst(1)) }
+        return p
+    }
+
+    /// 显示用：把 home 缩成 ~
+    static func pretty(_ p: String) -> String {
+        p.replacingOccurrences(of: NSHomeDirectory(), with: "~")
+    }
+
+    static func envKey(_ key: String) -> String {
+        switch key {
+        case "claude": return "AGENTDONE_CLAUDE_ROOT"
+        case "codex": return "AGENTDONE_CODEX_HOME"
+        case "dsh": return "AGENTDONE_DSH_HOME"
+        case "zcode": return "AGENTDONE_ZCODE_ROOT"
+        default: return "AGENTDONE_ANTIGRAVITY_ROOT"
+        }
+    }
+
+    static func base(_ key: String) -> String {
+        if let e = ProcessInfo.processInfo.environment[envKey(key)], !e.isEmpty { return expand(e) }
+        if let c = ConfigStore.load().paths[key], !c.isEmpty { return expand(c) }
+        return expand(defaults[key] ?? "~")
+    }
+
+    /// Codex 的 sessions 目录（测试可以直接指到 sessions）
+    static func codexSessions() -> String {
+        if let e = ProcessInfo.processInfo.environment["AGENTDONE_CODEX_ROOT"], !e.isEmpty { return expand(e) }
+        return base("codex") + "/sessions"
+    }
+
+    static func dshSessions() -> String {
+        if let e = ProcessInfo.processInfo.environment["AGENTDONE_DSH_ROOT"], !e.isEmpty { return expand(e) }
+        return base("dsh") + "/storages/session_projcache/sessions"
     }
 }
 
@@ -1248,7 +1342,9 @@ final class SettingsModel: ObservableObject {
     }
 
     func persist() {
-        ConfigStore.save(AppConfig(followVSCode: followVSCode, hosts: entries))
+        // 保存时把用户自己配的 paths 带上，别被设置页覆盖掉
+        ConfigStore.save(AppConfig(followVSCode: followVSCode, hosts: entries,
+                                   paths: ConfigStore.load().paths))
         RemoteWatcher.shared.refresh()
     }
 
@@ -1401,7 +1497,7 @@ struct SettingsView: View {
                 }
                 .padding(.vertical, 4)
             }
-            .frame(maxHeight: 216)
+            .frame(maxHeight: 150)
 
             HStack(spacing: 6) {
                 TextField("手动添加主机（ssh 别名）", text: $model.customHost)
@@ -1439,8 +1535,37 @@ struct SettingsView: View {
                 .frame(maxHeight: 90)
                 .padding(.horizontal, 16).padding(.bottom, 12)
             }
+
+            Divider()
+
+            VStack(alignment: .leading, spacing: 5) {
+                HStack(spacing: 6) {
+                    Text("数据目录").font(.system(size: 12, weight: .semibold))
+                    Spacer()
+                    Button("打开配置文件") {
+                        NSWorkspace.shared.open(URL(fileURLWithPath: ConfigStore.path))
+                    }
+                    .buttonStyle(.plain).font(.system(size: 10.5)).foregroundStyle(.blue)
+                }
+                ForEach(AgentPaths.labels, id: \.key) { item in
+                    HStack(spacing: 6) {
+                        Text(item.title)
+                            .font(.system(size: 10.5)).foregroundStyle(.secondary)
+                            .frame(width: 116, alignment: .leading)
+                        Text(AgentPaths.pretty(AgentPaths.base(item.key)))
+                            .font(.system(size: 10.5, design: .monospaced))
+                            .foregroundStyle(.primary)
+                            .lineLimit(1).truncationMode(.middle)
+                            .textSelection(.enabled)
+                        Spacer(minLength: 0)
+                    }
+                }
+                Text("改完保存即生效，不用重启；写错路径会当作没有该 Agent。")
+                    .font(.system(size: 9.5)).foregroundStyle(.tertiary)
+            }
+            .padding(.horizontal, 16).padding(.vertical, 10)
         }
-        .frame(width: 480, height: 516)
+        .frame(width: 480, height: 640)
     }
 }
 
@@ -1710,6 +1835,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var dsh: DSHWatcher?
     var zcode: ZCodeWatcher?
     var antigravity: AntigravityWatcher?
+    private var configTimer: Timer?
+    private var configSig = ""
     var remote: RemoteWatcher?
     var statusItem: NSStatusItem!
     var popover: NSPopover?
@@ -1735,6 +1862,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         server.onStatus = { [weak self] in self?.store.json() ?? Data("{}".utf8) }
         server.start()
 
+        let r = RemoteWatcher.shared
+        r.onEvent = { [weak self] ev in self?.handle(ev) }
+        r.start()
+        remote = r
+
+        startLocalWatchers()
+        watchConfig()
+    }
+
+    /// 数据目录可能写在 ~/.agentdone/config.json，改了要能生效
+    private func startLocalWatchers() {
         let w = CodexWatcher()
         w.onEvent = { [weak self] ev in self?.handle(ev) }
         w.start()
@@ -1745,11 +1883,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         d.start()
         dsh = d
 
-        let r = RemoteWatcher.shared
-        r.onEvent = { [weak self] ev in self?.handle(ev) }
-        r.start()
-        remote = r
-
         let z = ZCodeWatcher()
         z.onEvent = { [weak self] ev in self?.handle(ev) }
         z.start()
@@ -1759,6 +1892,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         ag.onEvent = { [weak self] ev in self?.handle(ev) }
         ag.start()
         antigravity = ag
+    }
+
+    private func stopLocalWatchers() {
+        codex?.stop(); codex = nil
+        dsh?.stop(); dsh = nil
+        zcode?.stop(); zcode = nil
+        antigravity?.stop(); antigravity = nil
+    }
+
+    private func watchConfig() {
+        configTimer = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in
+            guard let self else { return }
+            let attrs = try? FileManager.default.attributesOfItem(atPath: ConfigStore.path)
+            let sig = "\((attrs?[.size] as? Int) ?? -1)@\((attrs?[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0)"
+            if self.configSig.isEmpty { self.configSig = sig; return }
+            guard sig != self.configSig else { return }
+            self.configSig = sig
+            NSLog("AgentDone: 配置变了，重载数据目录")
+            self.stopLocalWatchers()
+            // 目录可能刚建好，隔一下再起，避免拿到半截状态
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { self.startLocalWatchers() }
+        }
     }
 
     func anotherInstanceRunning() -> Bool {
@@ -1919,7 +2074,7 @@ extension Snapshot {
         let model = SettingsModel(demo: true)
         let view = SettingsView(model: model).background(Color(NSColor.windowBackgroundColor))
         let host = NSHostingView(rootView: view)
-        host.frame = NSRect(x: 0, y: 0, width: 480, height: 516)
+        host.frame = NSRect(x: 0, y: 0, width: 480, height: 640)
         host.layoutSubtreeIfNeeded()
         guard let rep = host.bitmapImageRepForCachingDisplay(in: host.bounds) else { return }
         host.cacheDisplay(in: host.bounds, to: rep)
@@ -1956,6 +2111,15 @@ struct AgentDoneMain {
         }
         if let i = args.firstIndex(of: "--snapshot-settings"), i + 1 < args.count {
             Snapshot.renderSettings(path: args[i + 1])
+            exit(0)
+        }
+        if args.contains("--paths") {
+            print("config: \(ConfigStore.path)")
+            for item in AgentPaths.labels {
+                print("\(item.key.padding(toLength: 12, withPad: " ", startingAt: 0)) \(AgentPaths.base(item.key))")
+            }
+            print("codex sessions: \(AgentPaths.codexSessions())")
+            print("dsh sessions:   \(AgentPaths.dshSessions())")
             exit(0)
         }
         if let i = args.firstIndex(of: "--snapshot-empty"), i + 1 < args.count {

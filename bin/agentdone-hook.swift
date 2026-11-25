@@ -283,8 +283,30 @@ func homeDir() -> String {
     ProcessInfo.processInfo.environment["HOME"] ?? NSHomeDirectory()
 }
 
+/// ~/.agentdone/config.json 里的 paths（数据目录可配置）
+func configPaths() -> [String: String] {
+    guard let d = FileManager.default.contents(atPath: homeDir() + "/.agentdone/config.json"),
+          let obj = try? JSONSerialization.jsonObject(with: d) as? [String: Any],
+          let paths = obj["paths"] as? [String: String] else { return [:] }
+    return paths
+}
+
+func expand(_ p: String) -> String {
+    if p == "~" { return homeDir() }
+    if p.hasPrefix("~/") { return homeDir() + String(p.dropFirst(1)) }
+    return p
+}
+
+/// Claude 的配置目录：CLAUDE_CONFIG_DIR > config.json 的 paths.claude > ~/.claude
+func claudeDir() -> String {
+    if let e = ProcessInfo.processInfo.environment["AGENTDONE_CLAUDE_ROOT"], !e.isEmpty { return expand(e) }
+    if let e = ProcessInfo.processInfo.environment["CLAUDE_CONFIG_DIR"], !e.isEmpty { return expand(e) }
+    if let d = configPaths()["claude"], !d.isEmpty { return expand(d) }
+    return homeDir() + "/.claude"
+}
+
 func settingsPath() -> String {
-    homeDir() + "/.claude/settings.json"
+    claudeDir() + "/settings.json"
 }
 
 func readSettings(_ path: String) -> [String: Any]? {
