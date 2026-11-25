@@ -5,7 +5,7 @@ set -euo pipefail
 APP_NAME="AgentDone"
 PREFIX="${PREFIX:-$HOME/Applications}"
 BUNDLE="$PREFIX/$APP_NAME.app"
-HOOK_DIR="$HOME/.agentdone"
+HOOK_DIR="${AGENTDONE_HOME:-$HOME/.agentdone}"
 PLIST="$HOME/Library/LaunchAgents/dev.agentdone.app.plist"
 
 say() { printf "\033[1m▸ %s\033[0m\n" "$*"; }

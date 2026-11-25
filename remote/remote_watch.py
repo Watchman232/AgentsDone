@@ -13,8 +13,18 @@ import time
 import sqlite3
 
 HOME = os.path.expanduser("~")
-CODEX = os.path.join(HOME, ".codex", "sessions")
-SPOOL = os.path.join(HOME, ".agentdone", "spool.jsonl")
+
+
+def _env_path(name, default):
+    """路径可被环境变量覆盖（Mac 侧按主机配置传过来），支持 ~"""
+    v = os.environ.get(name, "")
+    return os.path.expanduser(v) if v else default
+
+
+# Codex 的会话目录（默认 ~/.codex/sessions，可用 AGENTDONE_CODEX_ROOT 覆盖）
+CODEX_HOME = _env_path("AGENTDONE_CODEX_ROOT", os.path.join(HOME, ".codex"))
+CODEX = os.path.join(CODEX_HOME, "sessions")
+SPOOL = _env_path("AGENTDONE_SPOOL", os.path.join(HOME, ".agentdone", "spool.jsonl"))
 DUMP = "--dump" in sys.argv
 INTERVAL = 1.5
 
@@ -89,7 +99,7 @@ def codex_db_title(sid):
     """VS Code 扩展里显示的会话名就存在 ~/.codex/state_*.sqlite 的 threads 表"""
     if not sid:
         return ""
-    dbs = sorted(glob.glob(os.path.expanduser("~/.codex/state_*.sqlite")))
+    dbs = sorted(glob.glob(os.path.join(CODEX_HOME, "state_*.sqlite")))
     if not dbs:
         return ""
     try:

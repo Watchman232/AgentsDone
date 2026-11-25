@@ -603,12 +603,7 @@ final class DSHWatcher {
         logTimer = t
     }
 
-    private func logsRoot() -> String {
-        if let e = ProcessInfo.processInfo.environment["AGENTDONE_DSH_LOGS"], !e.isEmpty {
-            return AgentPaths.expand(e)
-        }
-        return AgentPaths.base("dsh") + "/sessions"
-    }
+    private func logsRoot() -> String { AgentPaths.dshLogs() }
 
     private func scanLogs(emit: Bool) {
         let root = logsRoot()
@@ -728,6 +723,11 @@ final class DSHWatcher {
     }
 }
 
+/// 给远端命令用的单引号转义
+func shellQuote(_ s: String) -> String {
+    "'" + s.replacingOccurrences(of: "'", with: "'\\''") + "'"
+}
+
 // MARK: - 读 DSH 的会话日志（zstd 多帧，借 DSH 自带 node 解压）
 
 /// DSH 把每个事件单独压成一个 zstd 帧、追加进 `session.v4.jsonl.zstd`，
@@ -756,15 +756,21 @@ enum DSHLogReader {
     console.log(JSON.stringify(out));
     """
 
-    /// DSH 桌面版自带 node（就是它的主二进制），可用性决定 DSH 审批提醒开不开
+    /// DSH 桌面版自带 node（就是它的主二进制），可用性决定 DSH 审批提醒开不开。
+    /// 查找顺序：环境变量 → 配置文件 dshNode → 常见安装位置。
     static var nodePath: String? {
-        if let e = ProcessInfo.processInfo.environment["AGENTDONE_DSH_NODE"], !e.isEmpty,
-           FileManager.default.isExecutableFile(atPath: e) { return e }
-        if let e = ProcessInfo.processInfo.environment["DSH_DESKTOP_NODE_EXECUTABLE"], !e.isEmpty,
-           FileManager.default.isExecutableFile(atPath: e) { return e }
+        func usable(_ p: String?) -> String? {
+            guard let p, !p.isEmpty else { return nil }
+            let full = AgentPaths.expand(p)
+            return FileManager.default.isExecutableFile(atPath: full) ? full : nil
+        }
+        if let p = usable(ProcessInfo.processInfo.environment["AGENTDONE_DSH_NODE"]) { return p }
+        if let p = usable(ProcessInfo.processInfo.environment["DSH_DESKTOP_NODE_EXECUTABLE"]) { return p }
+        if let p = usable(ConfigStore.load().dshNode) { return p }
+        let home = NSHomeDirectory()
         let candidates = [
             "/Applications/DeepSeek Harness.app/Contents/MacOS/DeepSeek Harness",
-            NSHomeDirectory() + "/Applications/DeepSeek Harness.app/Contents/MacOS/DeepSeek Harness",
+            home + "/Applications/DeepSeek Harness.app/Contents/MacOS/DeepSeek Harness",
         ]
         return candidates.first { FileManager.default.isExecutableFile(atPath: $0) }
     }
@@ -1104,7 +1110,22 @@ final class AntigravityWatcher {
 struct RemoteEntry: Codable, Identifiable, Equatable {
     var host: String
     var enabled: Bool
+    /// 这台机器上非默认的数据目录，键：codex（AGENTDONE_CODEX_ROOT）、claude（CLAUDE_CONFIG_DIR）
+    var paths: [String: String] = [:]
     var id: String { host }
+
+    init(host: String, enabled: Bool, paths: [String: String] = [:]) {
+        self.host = host
+        self.enabled = enabled
+        self.paths = paths
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        host = try c.decode(String.self, forKey: .host)
+        enabled = try c.decodeIfPresent(Bool.self, forKey: .enabled) ?? true
+        paths = try c.decodeIfPresent([String: String].self, forKey: .paths) ?? [:]
+    }
 }
 
 struct AppConfig: Codable {
@@ -1112,13 +1133,17 @@ struct AppConfig: Codable {
     var hosts: [RemoteEntry] = []
     /// 各 Agent 的数据目录，键：claude / codex / dsh / zcode / antigravity
     var paths: [String: String] = [:]
+    /// DSH 桌面版的可执行文件；用来解压它的 zstd 会话日志（读审批事件）。
+    /// 留空就按常见安装位置自动找。
+    var dshNode: String = ""
 
     init() {}
 
-    init(followVSCode: Bool, hosts: [RemoteEntry], paths: [String: String] = [:]) {
+    init(followVSCode: Bool, hosts: [RemoteEntry], paths: [String: String] = [:], dshNode: String = "") {
         self.followVSCode = followVSCode
         self.hosts = hosts
         self.paths = paths
+        self.dshNode = dshNode
     }
 
     /// 手写解码：允许只写想要的那几个键（合成的 decoder 遇到缺键会整体失败）
@@ -1127,6 +1152,7 @@ struct AppConfig: Codable {
         followVSCode = try c.decodeIfPresent(Bool.self, forKey: .followVSCode) ?? true
         hosts = try c.decodeIfPresent([RemoteEntry].self, forKey: .hosts) ?? []
         paths = try c.decodeIfPresent([String: String].self, forKey: .paths) ?? [:]
+        dshNode = try c.decodeIfPresent(String.self, forKey: .dshNode) ?? ""
     }
 }
 
@@ -1200,6 +1226,14 @@ enum AgentPaths {
     static func codexSessions() -> String {
         if let e = ProcessInfo.processInfo.environment["AGENTDONE_CODEX_ROOT"], !e.isEmpty { return expand(e) }
         return base("codex") + "/sessions"
+    }
+
+    /// DSH 的会话日志目录（审批事件在里面）
+    static func dshLogs() -> String {
+        if let e = ProcessInfo.processInfo.environment["AGENTDONE_DSH_LOGS"], !e.isEmpty {
+            return expand(e)
+        }
+        return base("dsh") + "/sessions"
     }
 
     static func dshSessions() -> String {
@@ -1397,9 +1431,16 @@ final class RemoteWatcher {
 
         let p = Process()
         p.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
-        p.arguments = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=8",
-                       "-o", "ServerAliveInterval=20", "-o", "ServerAliveCountMax=2",
-                       "-o", "StrictHostKeyChecking=accept-new", host, "python3 -"]
+        var args = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=8",
+                    "-o", "ServerAliveInterval=20", "-o", "ServerAliveCountMax=2",
+                    "-o", "StrictHostKeyChecking=accept-new", host]
+        // 非默认目录：作为环境变量缀在远端命令前面（远端脚本里再 expanduser）
+        if let entry = ConfigStore.load().hosts.first(where: { $0.host == host }) {
+            if let c = entry.paths["codex"], !c.isEmpty { args.append("AGENTDONE_CODEX_ROOT=\(shellQuote(c))") }
+            if let c = entry.paths["claude"], !c.isEmpty { args.append("CLAUDE_CONFIG_DIR=\(shellQuote(c))") }
+        }
+        args += ["python3", "-"]
+        p.arguments = args
         let stdinPipe = Pipe(), stdoutPipe = Pipe()
         p.standardInput = stdinPipe
         p.standardOutput = stdoutPipe
@@ -1558,9 +1599,10 @@ final class SettingsModel: ObservableObject {
     }
 
     func persist() {
-        // 保存时把用户自己配的 paths 带上，别被设置页覆盖掉
+        // 保存时把用户自己配的 paths / dshNode 带上，别被设置页覆盖掉
+        let old = ConfigStore.load()
         ConfigStore.save(AppConfig(followVSCode: followVSCode, hosts: entries,
-                                   paths: ConfigStore.load().paths))
+                                   paths: old.paths, dshNode: old.dshNode))
         RemoteWatcher.shared.refresh()
     }
 
@@ -1775,6 +1817,22 @@ struct SettingsView: View {
                             .textSelection(.enabled)
                         Spacer(minLength: 0)
                     }
+                }
+                HStack(spacing: 6) {
+                    Text("DSH 解释器")
+                        .font(.system(size: 10.5)).foregroundStyle(.secondary)
+                        .frame(width: 116, alignment: .leading)
+                    if let node = DSHLogReader.nodePath {
+                        Text(AgentPaths.pretty(node))
+                            .font(.system(size: 10.5, design: .monospaced))
+                            .foregroundStyle(.primary)
+                            .lineLimit(1).truncationMode(.middle)
+                            .textSelection(.enabled)
+                    } else {
+                        Text("未找到 · 只影响 DSH 审批提醒")
+                            .font(.system(size: 10.5)).foregroundStyle(.tertiary)
+                    }
+                    Spacer(minLength: 0)
                 }
                 Text("改完保存即生效，不用重启；写错路径会当作没有该 Agent。")
                     .font(.system(size: 9.5)).foregroundStyle(.tertiary)
@@ -2251,8 +2309,8 @@ enum Snapshot {
             HookEvent(agent: "claude", kind: "done", sessionId: "c", cwd: "/Users/me/work/infra",
                       project: "infra", title: "Helm chart 升到 1.4",
                       detail: "Helm chart 已更新", host: "iTerm", bundleId: "com.googlecode.iterm2"),
-            HookEvent(agent: "codex", kind: "done", sessionId: "g", cwd: "/Users/me/work/mf-duplexDemo",
-                      project: "mf-duplexDemo", title: "修复训练管道的重试逻辑",
+            HookEvent(agent: "codex", kind: "done", sessionId: "g", cwd: "/Users/me/work/checkout-service",
+                      project: "checkout-service", title: "修复训练管道的重试逻辑",
                       detail: "远端跑完了：修好了数据管道的重试逻辑", host: "VS Code（远程）",
                       bundleId: "com.microsoft.VSCode"),
             HookEvent(agent: "dsh", kind: "needs", sessionId: "e", cwd: "/Users/me/work/agent-core",
@@ -2341,6 +2399,8 @@ struct AgentDoneMain {
             }
             print("codex sessions: \(AgentPaths.codexSessions())")
             print("dsh sessions:   \(AgentPaths.dshSessions())")
+            print("dsh logs:       \(AgentPaths.dshLogs())")
+            print("dsh node:       \(DSHLogReader.nodePath ?? "未找到（DSH 审批提醒不可用）")")
             exit(0)
         }
         if let i = args.firstIndex(of: "--snapshot-empty"), i + 1 < args.count {

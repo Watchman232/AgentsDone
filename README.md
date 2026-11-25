@@ -2,7 +2,8 @@
 
 极轻量的 macOS 菜单栏小工具：**同时开很多 AI 编码会话时，哪个跑完了、哪个在等你，一眼看见。**
 
-支持 5 类：Claude Code · Codex · DeepSeek Harness · ZCode ·（可扩展）
+支持 Claude Code · Codex · DeepSeek Harness · ZCode · Antigravity
+（都是读各自 App 的本地会话数据，不联网、不调模型）
 
 - 常驻 **21 MB** 内存，无网络请求，全部本地
 - 菜单栏一个 🔔 + 数字；完成瞬间顶部弹一枚胶囊 + 轻提示音
@@ -149,8 +150,8 @@ DSH 把审批写进会话日志：`approval/asked`（含 `toolName` + `reason`�
 Electron 当 node 用（`ELECTRON_RUN_AS_NODE=1`）来解，一次调用约 60ms；
 并且**只读新增字节、只解新帧**，不会把几 MB 的日志整个解一遍。
 
-前提：DSH 桌面版装在 `/Applications`（或 `~/Applications`）。找不到就只是不做审批提醒，
-其它照常。想手工指定解释器路径，设 `AGENTDONE_DSH_NODE`。
+前提：DSH 桌面版装在 `/Applications`（或 `~/Applications`）。装在别处就配 `dshNode`，
+或用环境变量 `AGENTDONE_DSH_NODE`。找不到只是不做审批提醒，其它照常。
 
 ## 远程集群（VS Code Remote-SSH / devspace）
 
@@ -192,7 +193,8 @@ Electron 当 node 用（`ELECTRON_RUN_AS_NODE=1`）来解，一次调用约 60ms
 （`vendor/`，arm64 + x86_64），直接装：
 
 ```bash
-cd agentdone
+git clone https://github.com/<你的账号>/AgentDone.git
+cd AgentDone
 ./install.sh
 ```
 
@@ -226,42 +228,71 @@ cd agentdone
 - **清除**：清掉已完成的；**静音**：不再弹胶囊和响铃（列表照常更新）
 - 列表里超过 6 小时的条目自动清理
 
-## 数据目录可配置
+## 路径全部可配置
 
-默认情况下 AgentDone 按各家 Agent 的默认位置去找会话数据。如果你改过它们的
-`CODEX_HOME`、把 `~/.claude` 挪了盘、或用的是便携版，需要在配置文件里指一下。
+AgentDone 里没有任何写死的个人路径。默认按各家 Agent 的标准位置找数据，
+换过盘、用过便携版、或远端机器布局不一样，都在配置文件里改。
 
-配置文件：`~/.agentdone/config.json`（菜单栏 → 设置 → 「数据目录」右侧的「打开配置文件」）
+配置文件：`~/.agentdone/config.json`
+（菜单栏 → 设置 → 「数据目录」右侧的「打开配置文件」）
 
 ```json
 {
+  "followVSCode": true,
+  "hosts": [
+    {
+      "host": "my-gpu-box",
+      "enabled": true,
+      "paths": { "codex": "~/work/.codex" }
+    }
+  ],
   "paths": {
     "claude": "~/.claude",
     "codex": "~/codex-home",
     "dsh": "/Volumes/Data/dsh",
     "zcode": "~/.zcode/v2",
     "antigravity": "~/.gemini/antigravity"
-  }
+  },
+  "dshNode": "/Applications/DeepSeek Harness.app/Contents/MacOS/DeepSeek Harness"
 }
 ```
+
+### 本机数据目录：`paths`
 
 | 键 | 默认值 | 实际读取 |
 |---|---|---|
 | `claude` | `~/.claude` | `settings.json`（安装/卸载 hooks 时写入这里） |
 | `codex` | `~/.codex` | `<codex>/sessions/**/rollout-*.jsonl` 和 `<codex>/state_*.sqlite`（会话名） |
-| `dsh` | `~/.dsh` | `<dsh>/storages/session_projcache/sessions/*.json` |
+| `dsh` | `~/.dsh` | `<dsh>/storages/session_projcache/sessions/*.json` 和 `<dsh>/sessions/**/session.v4.jsonl.zstd`（审批） |
 | `zcode` | `~/.zcode/v2` | `<zcode>/tasks-index.sqlite` |
-| `antigravity` | `~/.gemini/antigravity` | 里面的 `conversation_summaries.db` 和 `conversations/<id>.db` |
+| `antigravity` | `~/.gemini/antigravity` | `conversation_summaries.db` 和 `conversations/<id>.db` |
 
-说明：
-
-- 支持 `~` 开头，也支持绝对路径；**没写的键用默认值**，不是一份全量清单
-- 改完保存即生效（3 秒内自动重载数据目录），不用重启 App
-- 路径写错不会报错，只是那个 Agent 静默地不出现 —— 设置页里能看到当前实际生效的路径
+- 支持 `~` 开头，也支持绝对路径；**没写的键用默认值**，不是全量清单
+- 改完保存即生效（3 秒内自动重载），不用重启
+- 路径写错不会报错，那个 Agent 静默不出现 —— 设置页里能看到当前生效的路径
 - Claude 还额外认官方的 `CLAUDE_CONFIG_DIR`（优先级高于配置文件）
 - 这几个目录的**上一级**才是配置对象：`codex` 指到 `CODEX_HOME`，不是 `sessions`
 
-不确定现在到底读的是哪个目录时，直接问它：
+### DSH 解释器：`dshNode`
+
+DSH 的审批写在 zstd 压缩的会话日志里，Swift 没有 zstd，所以借 DSH 桌面版自带的
+Electron（`ELECTRON_RUN_AS_NODE=1`）来解压。留空就自动在 `/Applications` 和
+`~/Applications` 下找 `DeepSeek Harness.app`；装在别处就写这里。
+找不到只是不做 DSH 审批提醒，其它照常。
+
+### 远端机器的数据目录：`hosts[].paths`
+
+远端默认也用 `~/.codex` 和 `~/.claude`。远端布局不一样时按主机配：
+
+```json
+{ "host": "my-gpu-box", "enabled": true,
+  "paths": { "codex": "~/work/.codex", "claude": "~/alt-claude" } }
+```
+
+App 连接时会把它们作为 `AGENTDONE_CODEX_ROOT` / `CLAUDE_CONFIG_DIR` 传给远端脚本。
+（Claude hooks 里的落盘位置由 `AGENTDONE_SPOOL` 控制，默认 `~/.agentdone/spool.jsonl`。）
+
+### 查当前实际生效的路径
 
 ```bash
 ~/Applications/AgentDone.app/Contents/MacOS/AgentDone --paths
@@ -272,18 +303,26 @@ config: /Users/you/.agentdone/config.json
 claude       /Users/you/.claude
 codex        /tmp/fakecodex2          ← 配置生效
 dsh          /Users/you/.dsh
-...
+zcode        /Users/you/.zcode/v2
+antigravity  /Users/you/.gemini/antigravity
 codex sessions: /tmp/fakecodex2/sessions
+dsh sessions:   /Users/you/.dsh/storages/session_projcache/sessions
+dsh logs:       /Users/you/.dsh/sessions
+dsh node:       /Applications/DeepSeek Harness.app/Contents/MacOS/DeepSeek Harness
 ```
 
-给测试/多实例用的环境变量（优先级最高，日常不用管）：
+### 环境变量（优先级最高，日常不用管）
 
-```bash
-AGENTDONE_CODEX_HOME=~/tmp/codex-home ./build/AgentDone    # 普通覆盖
-AGENTDONE_CODEX_ROOT=/tmp/x/sessions ./build/AgentDone     # 直接指定 sessions 目录
-AGENTDONE_DSH_HOME / AGENTDONE_DSH_ROOT / AGENTDONE_ZCODE_ROOT / AGENTDONE_ANTIGRAVITY_ROOT
-AGENTDONE_CLAUDE_ROOT / AGENTDONE_SOCK / AGENTDONE_CONFIG_DIR
-```
+| 变量 | 作用 |
+|---|---|
+| `AGENTDONE_CONFIG_DIR` | 配置文件目录（默认 `~/.agentdone`） |
+| `AGENTDONE_HOME` | 安装目录（hook 二进制、远端脚本），默认 `~/.agentdone` |
+| `AGENTDONE_SOCK` | 本机 IPC 套接字，默认 `/tmp/agentdone-<uid>.sock` |
+| `PREFIX` | 安装到哪，默认 `~/Applications`（`./install.sh` 时用） |
+| `AGENTDONE_CLAUDE_ROOT` / `CODEX_HOME` / `AGENTDONE_CODEX_ROOT` / `AGENTDONE_CODEX_DB` | 覆盖 Claude / Codex 数据位置 |
+| `AGENTDONE_DSH_HOME` / `AGENTDONE_DSH_ROOT` / `AGENTDONE_DSH_LOGS` / `AGENTDONE_DSH_NODE` | 覆盖 DSH 数据、日志、解释器 |
+| `AGENTDONE_ZCODE_ROOT` / `AGENTDONE_ANTIGRAVITY_ROOT` | 覆盖 ZCode / Antigravity 数据位置 |
+| `AGENTDONE_REMOTE=0` / `AGENTDONE_NO_LAUNCH=1` | 关掉远端监听 / 安装时不启动 |
 
 ## 卸载
 
@@ -324,3 +363,7 @@ docs/*.png                  界面预览（离屏渲染，非截屏）
 - hook 里任何异常都 `exit 0`，不会卡住或影响 Claude Code / Codex
 - 若你之前用 `codex notify` 接过别的工具，本工具**不会**改动你的 `~/.codex/config.toml`
 - 首次安装后需要新开一个 Claude Code 会话，hook 才会被读取
+
+## 协议
+
+MIT，见 [LICENSE](LICENSE)。用、改、商用、二开都行，保留版权声明即可。

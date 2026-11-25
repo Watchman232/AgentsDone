@@ -6,7 +6,10 @@ import Darwin
 @_silgen_name("proc_pidpath")
 private func c_proc_pidpath(_ pid: Int32, _ buffer: UnsafeMutableRawPointer?, _ buffersize: UInt32) -> Int32
 
-let SOCK = ProcessInfo.processInfo.environment["AGENTDONE_SOCK"] ?? "/tmp/agentdone-\(getuid()).sock"
+let ENV = ProcessInfo.processInfo.environment
+let SOCK = ENV["AGENTDONE_SOCK"] ?? "/tmp/agentdone-\(getuid()).sock"
+/// 安装目录，默认 ~/.agentdone（安装脚本与本程序保持一致）
+let AGENTDONE_HOME = ENV["AGENTDONE_HOME"].flatMap { $0.isEmpty ? nil : $0 } ?? (NSHomeDirectory() + "/.agentdone")
 
 // MARK: - 宿主识别
 
@@ -343,7 +346,7 @@ func writeSettings(_ obj: [String: Any], to path: String) -> Bool {
 
 func installHooks() -> Int32 {
     let path = settingsPath()
-    let hookBin = homeDir() + "/.agentdone/agentdone-hook"
+    let hookBin = AGENTDONE_HOME + "/agentdone-hook"
     try? FileManager.default.createDirectory(atPath: (path as NSString).deletingLastPathComponent,
                                              withIntermediateDirectories: true)
     guard var root = readSettings(path) else {

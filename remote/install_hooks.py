@@ -7,9 +7,14 @@
 import json, os, sys, time, shutil
 
 HOME = os.path.expanduser("~")
-SETTINGS = os.path.join(HOME, ".claude", "settings.json")
+# Claude 的配置目录：默认 ~/.claude，可用 CLAUDE_CONFIG_DIR 覆盖（与 Claude Code 本身一致）
+CLAUDE_DIR = os.path.expanduser(os.environ.get("CLAUDE_CONFIG_DIR") or os.path.join(HOME, ".claude"))
+SETTINGS = os.path.join(CLAUDE_DIR, "settings.json")
+# spool 落盘位置，可用 AGENTDONE_SPOOL 覆盖；安装时展开成绝对路径写进 hook
+SPOOL_PATH = os.path.expanduser(os.environ.get("AGENTDONE_SPOOL")
+                                or os.path.join(HOME, ".agentdone", "spool.jsonl"))
 SPOOL = ("python3 -c \"import sys,json,os;"
-         "p=os.path.expanduser('~/.agentdone/spool.jsonl');"
+         "p=" + repr(SPOOL_PATH) + ";"
          "os.makedirs(os.path.dirname(p),exist_ok=True);"
          "e=json.load(sys.stdin);"
          "e['_tp']=os.environ.get('TERM_PROGRAM','');"
