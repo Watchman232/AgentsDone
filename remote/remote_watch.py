@@ -4,7 +4,13 @@
 用法（Mac 侧通过 ssh 喂进来）：  ssh <host> python3 - [--dump]
   --dump  只跑一轮并把历史全吐出来（调试用）
 """
-import os, sys, json, glob, time
+import os
+import sys
+import re
+import json
+import glob
+import time
+import sqlite3
 
 HOME = os.path.expanduser("~")
 CODEX = os.path.join(HOME, ".codex", "sessions")
@@ -40,8 +46,42 @@ def read_new(path, off):
         return off, b""
 
 
+def clean_title(raw):
+    """去掉「引用别的会话」等噪声：扩展常把 [Chat thread](codex://threads/<uuid>) 写成首条消息"""
+    if not raw:
+        return ""
+    text = re.sub(r"\[[^\]]*\]\(codex://[^)]*\)", "", raw)
+    text = re.sub(r"\[([^\]]*)\]\(([^)]+)\)", lambda m: m.group(1) or m.group(2), text)
+    text = re.sub(r"codex://\S*", "", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    text = text.strip("，,。.、:：;；-—~·…")
+    return text[:60] if len(text) >= 2 else ""
+
+
+def codex_db_title(sid):
+    """VS Code 扩展里显示的会话名就存在 ~/.codex/state_*.sqlite 的 threads 表"""
+    if not sid:
+        return ""
+    dbs = sorted(glob.glob(os.path.expanduser("~/.codex/state_*.sqlite")))
+    if not dbs:
+        return ""
+    try:
+        con = sqlite3.connect("file:%s?mode=ro" % dbs[-1], uri=True, timeout=1.0)
+    except Exception:
+        return ""
+    try:
+        row = con.execute(
+            "select coalesce(nullif(name,''), nullif(title,'')) from threads where id = ? limit 1",
+            (sid,)).fetchone()
+        return clean_title(row[0]) if row and row[0] else ""
+    except Exception:
+        return ""
+    finally:
+        con.close()
+
+
 def codex_title(path):
-    """会话名 = rollout 里第一条真实用户输入（跳过 <environment_context> 这类系统包装）"""
+    """兜底：rollout 里第一条真实用户输入（跳过系统包装和会话引用）"""
     try:
         with open(path, "r", encoding="utf-8", errors="ignore") as f:
             for _, line in zip(range(400), f):
@@ -55,11 +95,11 @@ def codex_title(path):
                 p = obj.get("payload", {}) or {}
                 if obj.get("type") != "response_item" or p.get("type") != "message" or p.get("role") != "user":
                     continue
-                text = "".join(c.get("text", "") for c in p.get("content", [])
-                               if isinstance(c, dict)).replace("\n", " ").strip()
-                if not text or text.startswith("<"):
+                text = clean_title("".join(c.get("text", "") for c in p.get("content", [])
+                                           if isinstance(c, dict)))
+                if not text or text.startswith("<") or text.startswith("#"):
                     continue
-                return text[:60]
+                return text
     except Exception:
         pass
     return ""
@@ -72,8 +112,10 @@ def codex_meta(path):
     try:
         with open(path, "rb") as f:
             p = json.loads(f.readline()).get("payload", {}) or {}
-        info = (p.get("cwd") or "", p.get("originator") or "", p.get("source") or "",
-                codex_title(path))
+        sid = os.path.basename(path)
+        m = re.search(r"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})", sid)
+        title = codex_db_title(m.group(1) if m else "") or codex_title(path)
+        info = (p.get("cwd") or "", p.get("originator") or "", p.get("source") or "", title)
     except Exception:
         pass
     meta[path] = info

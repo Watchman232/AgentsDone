@@ -47,11 +47,15 @@ Codex 插件同理：它写的是同一份 `~/.codex/sessions/**/rollout-*.jsonl
 | Agent | 会话名来源 |
 |---|---|
 | Claude Code | transcript 里的 `custom-title` 行（就是你 `/rename` 或自动生成的标题），取最后一条 |
-| Codex | rollout 里第一条**真实**用户输入（自动跳过 `<environment_context>` 这类系统包装） |
+| Codex | `~/.codex/state_*.sqlite` 的 `threads.title`（**就是 VS Code 扩展里显示的名字**，会话被重命名后也会跟着更新）；查不到再退回 rollout 里第一条真实用户输入 |
 | DeepSeek Harness | `record.rows.title.val`（DSH 自己起的标题） |
 | ZCode | `tasks.title` |
 
 取不到名字时自动退回显示目录名，所以不会出现空行。
+
+> Codex 扩展常把「引用别的会话」作为首条消息，原文长这样：
+> `[Chat thread](codex://threads/01a1f256-…) 查看这个会话的本地历史…`
+> 直接取就会在列表里显示一串 UUID。现在会把这类链接剥掉，只留你真正写的那句话。
 
 ### 列表里只有"有结果"的会话
 

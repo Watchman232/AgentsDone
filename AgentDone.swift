@@ -212,6 +212,99 @@ final class EventServer {
 
 // MARK: - Codex rollout 监听（无需任何配置，覆盖 CLI / VS Code 扩展 / 桌面 App）
 
+
+// MARK: - Codex 会话名
+
+/// Codex 的"会话名"有两处来源：
+/// 1) `~/.codex/state_*.sqlite` 的 threads 表 —— VS Code 扩展里显示的就是这个（会话被重命名/自动起名后也会更新）
+/// 2) rollout 里第一条**真实的**用户输入 —— 扩展常把「引用别的会话」写成首条消息，
+///    直接取会得到一个满屏 UUID 的链接，所以要先剥链接再判断值不值得用
+enum CodexTitle {
+    static var home: String {
+        if let e = ProcessInfo.processInfo.environment["AGENTDONE_CODEX_DB"], !e.isEmpty { return e }
+        return NSHomeDirectory() + "/.codex"
+    }
+
+    /// state_N.sqlite 会随版本升级，取编号最大的那个
+    static func dbPath() -> String? {
+        let fm = FileManager.default
+        guard let names = try? fm.contentsOfDirectory(atPath: home) else { return nil }
+        let dbs = names.compactMap { name -> (Int, String)? in
+            guard name.hasPrefix("state_"), name.hasSuffix(".sqlite") else { return nil }
+            let digits = name.dropFirst(6).dropLast(7)
+            guard let n = Int(digits) else { return nil }
+            return (n, home + "/" + name)
+        }
+        return dbs.max { $0.0 < $1.0 }?.1
+    }
+
+    /// rollout 文件名末尾是会话 UUID：rollout-2026-11-23T15-53-03-01a2091c-....jsonl
+    static func sessionId(from path: String) -> String? {
+        let name = (path as NSString).lastPathComponent
+        let pattern = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+        guard let re = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else { return nil }
+        let range = NSRange(name.startIndex..., in: name)
+        guard let m = re.matches(in: name, options: [], range: range).last,
+              let r = Range(m.range, in: name) else { return nil }
+        return String(name[r])
+    }
+
+    static func name(id: String) -> String? {
+        guard let dbPath = dbPath() else { return nil }
+        let sql = "select coalesce(nullif(name,''), nullif(title,'')) from threads where id = ? limit 1;"
+        for uri in ["file:\(dbPath)?mode=ro", "file:\(dbPath)?immutable=1"] {
+            var db: OpaquePointer?
+            let flags = SQLITE_OPEN_READONLY | SQLITE_OPEN_URI
+            guard sqlite3_open_v2(uri, &db, flags, nil) == SQLITE_OK, let db else { continue }
+            defer { sqlite3_close(db) }
+            sqlite3_busy_timeout(db, 200)
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { continue }
+            defer { sqlite3_finalize(stmt) }
+            sqlite3_bind_text(stmt, 1, id, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self))
+            guard sqlite3_step(stmt) == SQLITE_ROW else { return nil }
+            let raw = sqlite3_column_text(stmt, 0).map { String(cString: $0) } ?? ""
+            let cleaned = clean(raw)
+            return cleaned.isEmpty ? nil : cleaned
+        }
+        return nil
+    }
+
+    /// 去掉「引用会话」这类噪声，只留下人能看懂的部分
+    static func clean(_ raw: String) -> String {
+        var text = raw
+        // [Chat thread](codex://threads/<uuid>) —— 引用别的会话，整个丢掉
+        if let re = try? NSRegularExpression(pattern: "\\[[^\\]]*\\]\\(codex://[^)]*\\)") {
+            text = re.stringByReplacingMatches(in: text, range: NSRange(text.startIndex..., in: text), withTemplate: "")
+        }
+        // [label](http…) -> label（label 为空或与目标相同则保留目标）
+        if let re = try? NSRegularExpression(pattern: "\\[([^\\]]*)\\]\\(([^)]+)\\)") {
+            let ns = text as NSString
+            var out = ""
+            var last = 0
+            for m in re.matches(in: text, range: NSRange(location: 0, length: ns.length)) {
+                out += ns.substring(with: NSRange(location: last, length: m.range.location - last))
+                let label = m.range(at: 1).location == NSNotFound ? "" : ns.substring(with: m.range(at: 1))
+                let target = m.range(at: 2).location == NSNotFound ? "" : ns.substring(with: m.range(at: 2))
+                out += label.isEmpty ? target : label
+                last = m.range.location + m.range.length
+            }
+            out += ns.substring(from: last)
+            text = out
+        }
+        // 剩下的裸 codex:// 链接
+        if let re = try? NSRegularExpression(pattern: "codex://\\S*") {
+            text = re.stringByReplacingMatches(in: text, range: NSRange(text.startIndex..., in: text), withTemplate: "")
+        }
+        text = text.replacingOccurrences(of: "\n", with: " ")
+            .replacingOccurrences(of: "\t", with: " ")
+        while text.contains("  ") { text = text.replacingOccurrences(of: "  ", with: " ") }
+        text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        text = text.trimmingCharacters(in: CharacterSet(charactersIn: "，,。.、:：;；-—~·…"))
+        return text.count >= 2 ? String(text.prefix(60)) : ""
+    }
+}
+
 final class CodexWatcher {
     private let root: String
     private var stream: FSEventStreamRef?
@@ -298,11 +391,11 @@ final class CodexWatcher {
                   payload["type"] as? String == "message",
                   payload["role"] as? String == "user",
                   let content = payload["content"] as? [[String: Any]] else { continue }
-            let text = content.compactMap { $0["text"] as? String }.joined()
-                .replacingOccurrences(of: "\n", with: " ")
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            if text.isEmpty || text.hasPrefix("<") { continue }
-            return String(text.prefix(60))
+            let raw = content.compactMap { $0["text"] as? String }.joined()
+            let text = CodexTitle.clean(raw)
+            // <environment_context> / "# AGENTS.md instructions" 这类是系统注入，不是用户问的
+            if text.isEmpty || text.hasPrefix("<") || text.hasPrefix("#") { continue }
+            return text
         }
         return ""
     }
@@ -331,15 +424,18 @@ final class CodexWatcher {
                 let sid = URL(fileURLWithPath: path).lastPathComponent
                     .replacingOccurrences(of: "rollout-", with: "")
                     .replacingOccurrences(of: ".jsonl", with: "")
+                // 扩展会重命名会话，库里的是最新最准的；拿不到再用 rollout 首条真实输入
+                let title = CodexTitle.sessionId(from: path)
+                    .flatMap { CodexTitle.name(id: $0) } ?? info.3
                 switch kind {
                 case "task_started":
                     emit(HookEvent(agent: "codex", kind: "working", sessionId: sid, cwd: info.cwd,
-                                   title: info.3, detail: "", host: info.host, bundleId: info.bundle), path)
+                                   title: title, detail: "", host: info.host, bundleId: info.bundle), path)
                 case "task_complete":
                     let msg = (payload["last_agent_message"] as? String ?? "")
                         .replacingOccurrences(of: "\n", with: " ")
                     emit(HookEvent(agent: "codex", kind: "done", sessionId: sid, cwd: info.cwd,
-                                   title: info.3, detail: String(msg.prefix(80)),
+                                   title: title, detail: String(msg.prefix(80)),
                                    host: info.host, bundleId: info.bundle), path)
                 default: break
                 }
