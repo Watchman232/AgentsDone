@@ -413,6 +413,37 @@ final class CodexWatcher {
         let size = (try? FileManager.default.attributesOfItem(atPath: path)[.size] as? Int) ?? 0
         offsets[path] = size
         loadMeta(path)
+        // 历史事件不补发，但"正在跑"的会话要立刻出现在列表里（working 不响铃）
+        guard tailState(path) == "working" else { return }
+        let info = meta[path] ?? ("", "终端", "", "")
+        let sid = URL(fileURLWithPath: path).lastPathComponent
+            .replacingOccurrences(of: "rollout-", with: "")
+            .replacingOccurrences(of: ".jsonl", with: "")
+        let title = CodexTitle.sessionId(from: path)
+            .flatMap { CodexTitle.name(id: $0) } ?? info.3
+        emit(HookEvent(agent: "codex", kind: "working", sessionId: sid, cwd: info.cwd,
+                       title: title, detail: "", host: info.host, bundleId: info.bundle), path)
+    }
+
+    /// 从文件尾部推断状态：进行中 / 已完成 / 等你批准（token_count、response_item 之类跳过）
+    private func tailState(_ path: String) -> String? {
+        guard let fh = FileHandle(forReadingAtPath: path) else { return nil }
+        defer { try? fh.close() }
+        let size = (try? FileManager.default.attributesOfItem(atPath: path)[.size] as? Int) ?? 0
+        try? fh.seek(toOffset: UInt64(max(0, size - 200_000)))
+        let data = fh.readDataToEndOfFile()
+        var st: String?
+        for line in data.split(separator: 0x0A) {
+            guard let obj = (try? JSONSerialization.jsonObject(with: Data(line))) as? [String: Any],
+                  obj["type"] as? String == "event_msg",
+                  let payload = obj["payload"] as? [String: Any],
+                  let kind = payload["type"] as? String else { continue }
+            if kind == "task_complete" { st = "done" }
+            else if kind == "task_started" { st = "working" }
+            else if CodexNeeds.requestKinds.contains(kind) { st = "needs" }
+            else if kind == "turn_aborted" || kind == "error" { st = "done" }
+        }
+        return st ?? "working"
     }
 
     private func loadMeta(_ path: String) {
@@ -725,7 +756,9 @@ final class AntigravityWatcher {
     func start() {
         guard FileManager.default.fileExists(atPath: dir) else { return }
         scan(emit: false)
-        primed = true
+        // 库里一条都读不到，说明当时被 Antigravity 占着；等下一轮再算打底完成，
+        // 否则会把老会话当成"刚刚完成"弹出来
+        primed = !last.isEmpty
 
         var ctx = FSEventStreamContext(version: 0,
                                        info: Unmanaged.passUnretained(self).toOpaque(),
@@ -875,6 +908,7 @@ final class AntigravityWatcher {
 
     private func scan(emit: Bool) {
         let all = summaries()
+        if !primed && !all.isEmpty { primed = true }
         for (id, m) in all {
             // 会话级状态：优先看最后一步
             let (stepStatus, err) = lastStep(id)
@@ -1145,7 +1179,7 @@ final class RemoteWatcher {
     func refresh() {
         let want = Set(targets())
         for host in conns.keys where !want.contains(host) { teardown(host) }
-        for host in want where conns[host]?.proc?.isRunning != true { connect(host) }
+        for host in want where conns[host] == nil { connect(host) }
         notifyStatus()
     }
 
@@ -1174,9 +1208,12 @@ final class RemoteWatcher {
     }
 
     private func connect(_ host: String) {
+        // 已经有一条（含正在连接的）就不再起第二条，否则每 15 秒刷新会漏出重复 ssh
+        guard conns[host] == nil else { return }
         guard let script = RemoteWatcher.loadScript() else { return }
         var conn = Conn()
         conn.state = "connecting"
+        conns[host] = conn          // 先占位，堵住重入
 
         let p = Process()
         p.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
@@ -1196,12 +1233,11 @@ final class RemoteWatcher {
         }
         p.terminationHandler = { [weak self] _ in
             guard let self else { return }
-            if var c = self.conns[host] {
-                c.state = "error"
-                self.conns[host] = c
+            DispatchQueue.main.async {
+                self.conns[host] = nil      // 清掉占位，refresh 才会重连
+                self.notifyStatus()
+                DispatchQueue.main.asyncAfter(deadline: .now() + 8) { self.refresh() }
             }
-            self.notifyStatus()
-            DispatchQueue.main.asyncAfter(deadline: .now() + 8) { self.refresh() }
         }
 
         do { try p.run() } catch {

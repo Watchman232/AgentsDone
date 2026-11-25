@@ -20,6 +20,7 @@ INTERVAL = 1.5
 
 offs = {}
 waiting = {}
+state = {}
 
 # Codex 里值得监听的事件：任务边界 + 「等你批准/回答」+ 批准后接着跑的各种执行事件
 CODEX_REQUEST_EVENTS = ("exec_approval_request", "apply_patch_approval_request",
@@ -250,6 +251,38 @@ CLAUDE_KIND = {
 }
 
 
+def codex_tail_state(path):
+    """从文件尾部推断当前状态：进行中 / 已完成 / 等你批准。
+
+    只看 event_msg 里的"有意义"事件，token_count、response_item 这些跳过。
+    """
+    try:
+        size = os.path.getsize(path)
+        with open(path, "rb") as f:
+            f.seek(max(0, size - 200000))
+            tail = f.read().decode("utf-8", "ignore")
+    except Exception:
+        return None
+    st = None
+    for line in tail.splitlines():
+        if '"event_msg"' not in line:
+            continue
+        try:
+            obj = json.loads(line)
+        except Exception:
+            continue
+        k = (obj.get("payload") or {}).get("type") or ""
+        if k == "task_complete":
+            st = "done"
+        elif k in CODEX_REQUEST_EVENTS:
+            st = "needs"
+        elif k == "task_started":
+            st = "working"
+        elif k in ("turn_aborted", "error"):
+            st = "done"
+    return st
+
+
 def scan(emit):
     global spool_off
     # ---- Codex：直接读它的 rollout 日志 ----
@@ -257,11 +290,19 @@ def scan(emit):
         off = offs.get(path, 0)
         new, data = read_new(path, off)
         offs[path] = new
-        if not data or not emit:
+        if not data:
             continue
-        text = data.decode("utf-8", "ignore")
         cwd, originator, source, title = codex_meta(path)
         sid = os.path.basename(path).replace("rollout-", "").replace(".jsonl", "")
+        if not emit:
+            # 启动打底：历史事件不发，但"正在跑"的会话要立刻出现（working 不响铃）
+            st = codex_tail_state(path)
+            state[path] = st
+            if st == "working":
+                out({"agent": "codex", "kind": "working", "session": sid, "cwd": cwd,
+                     "originator": originator, "source": source, "title": title, "detail": ""})
+            continue
+        text = data.decode("utf-8", "ignore")
         for line in text.splitlines():
             if not any(k in line for k in CODEX_WATCH_EVENTS):
                 continue
