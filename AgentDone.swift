@@ -370,9 +370,10 @@ final class CodexWatcher {
     }
 
     func stop() {
-        guard let stream else { return }
-        FSEventStreamStop(stream); FSEventStreamInvalidate(stream); FSEventStreamRelease(stream)
-        self.stream = nil
+        if let stream {
+            FSEventStreamStop(stream); FSEventStreamInvalidate(stream); FSEventStreamRelease(stream)
+            self.stream = nil
+        }
     }
 
     func start() {
@@ -557,6 +558,8 @@ final class DSHWatcher {
     private let root: String
     private var stream: FSEventStreamRef?
     private var last: [String: (state: String, lastTurn: Int, mtime: Date, size: Int)] = [:]
+    private var logOffsets: [String: Int] = [:]
+    private var logTimer: DispatchSourceTimer?
     var onEvent: ((HookEvent) -> Void)?
 
     init(root: String? = nil) {
@@ -564,9 +567,11 @@ final class DSHWatcher {
     }
 
     func stop() {
-        guard let stream else { return }
-        FSEventStreamStop(stream); FSEventStreamInvalidate(stream); FSEventStreamRelease(stream)
-        self.stream = nil
+        if let stream {
+            FSEventStreamStop(stream); FSEventStreamInvalidate(stream); FSEventStreamRelease(stream)
+            self.stream = nil
+        }
+        logTimer?.cancel(); logTimer = nil
     }
 
     func start() {
@@ -584,6 +589,88 @@ final class DSHWatcher {
         FSEventStreamSetDispatchQueue(stream, DispatchQueue(label: "agentdone.dsh"))
         FSEventStreamStart(stream)
         scan()
+        startLogTail()
+    }
+
+    /// 会话日志（session.v4.jsonl.zstd）里才有审批事件，2 秒看一次文件大小
+    private func startLogTail() {
+        guard DSHLogReader.nodePath != nil else { return }
+        scanLogs(emit: false)
+        let t = DispatchSource.makeTimerSource(queue: DispatchQueue(label: "agentdone.dsh.log"))
+        t.schedule(deadline: .now() + 2, repeating: 2)
+        t.setEventHandler { [weak self] in self?.scanLogs(emit: true) }
+        t.resume()
+        logTimer = t
+    }
+
+    private func logsRoot() -> String {
+        if let e = ProcessInfo.processInfo.environment["AGENTDONE_DSH_LOGS"], !e.isEmpty {
+            return AgentPaths.expand(e)
+        }
+        return AgentPaths.base("dsh") + "/sessions"
+    }
+
+    private func scanLogs(emit: Bool) {
+        let root = logsRoot()
+        guard let en = FileManager.default.enumerator(atPath: root) else { return }
+        for case let rel as String in en {
+            guard rel.hasSuffix("session.v4.jsonl.zstd") else { continue }
+            let full = root + "/" + rel
+            guard let attrs = try? FileManager.default.attributesOfItem(atPath: full),
+                  let size = attrs[.size] as? Int else { continue }
+            if logOffsets[full] == nil {
+                logOffsets[full] = size          // 打底：历史不补发
+                continue
+            }
+            guard size > (logOffsets[full] ?? 0) else { continue }
+            guard let (lines, next) = DSHLogReader.read(path: full, from: logOffsets[full] ?? 0) else { return }
+            logOffsets[full] = next
+            guard emit else { continue }
+            handleLog(lines, path: full)
+        }
+    }
+
+    /// `approval/asked` → 等你批准；`approval/decided` → 继续跑
+    private func handleLog(_ lines: [String], path: String) {
+        let sid = (path as NSString).deletingLastPathComponent.components(separatedBy: "/").last ?? ""
+        guard sid.hasPrefix("session-") else { return }
+        var cwd = "", title = ""
+        if let d = FileManager.default.contents(atPath: root + "/" + sid + ".json"),
+           let obj = (try? JSONSerialization.jsonObject(with: d)) as? [String: Any],
+           let record = obj["record"] as? [String: Any] {
+            cwd = ((record["identity"] as? [String: Any])?["cwd"] as? String) ?? ""
+            if let rows = record["rows"] as? [String: Any] {
+                title = ((rows["title"] as? [String: Any])?["val"] as? String) ?? ""
+            }
+        }
+        let project = cwd.isEmpty ? "DSH" : (cwd as NSString).lastPathComponent
+        for line in lines {
+            guard let obj = (try? JSONSerialization.jsonObject(with: Data(line.utf8))) as? [String: Any],
+                  let type = obj["type"] as? String,
+                  let data = obj["data"] as? [String: Any] else { continue }
+            switch type {
+            case "approval/asked":
+                let tool = (data["toolName"] as? String) ?? "工具"
+                let reason = ((data["reason"] as? String) ?? "")
+                    .replacingOccurrences(of: "\n", with: " ")
+                    .trimmingCharacters(in: .whitespaces)
+                let detail = reason.isEmpty ? "等待批准：\(tool)" : "等待批准：\(tool) · \(reason)"
+                emit(HookEvent(agent: "dsh", kind: "needs", sessionId: sid, cwd: cwd,
+                               project: project, title: title,
+                               detail: String(detail.prefix(80)), host: "DeepSeek Harness", bundleId: ""))
+            case "approval/decided":
+                // 批了/拒了都算继续（拒绝后通常跟着 turn/end，缓存那边会给 done）
+                emit(HookEvent(agent: "dsh", kind: "working", sessionId: sid, cwd: cwd,
+                               project: project, title: title, detail: "",
+                               host: "DeepSeek Harness", bundleId: ""))
+            default:
+                break
+            }
+        }
+    }
+
+    private func emit(_ ev: HookEvent) {
+        DispatchQueue.main.async { self.onEvent?(ev) }
     }
 
     private func files() -> [String] {
@@ -627,7 +714,7 @@ final class DSHWatcher {
         let previous = last[path]
         last[path] = (state, lastTurn, mtime, size)
 
-        guard emit, previous?.state != state, lastTurn > 0, !blank, !cwd.isEmpty else { return }
+        guard emit || (previous == nil && state == "working"), previous?.state != state, lastTurn > 0, !blank, !cwd.isEmpty else { return }
         let sid = (path as NSString).lastPathComponent.replacingOccurrences(of: ".json", with: "")
         let project = cwd.isEmpty ? "DSH" : (cwd as NSString).lastPathComponent
         DispatchQueue.main.async {
@@ -638,6 +725,69 @@ final class DSHWatcher {
                                         .prefix(80)),
                                     host: "DeepSeek Harness", bundleId: "com.deepseek.dsh"))
         }
+    }
+}
+
+// MARK: - 读 DSH 的会话日志（zstd 多帧，借 DSH 自带 node 解压）
+
+/// DSH 把每个事件单独压成一个 zstd 帧、追加进 `session.v4.jsonl.zstd`，
+/// 所以可以只读新增字节、只解新帧 —— 不用把整个日志解一遍。
+/// Swift 没有 zstd，借 DSH 桌面版自带的 Electron（ELECTRON_RUN_AS_NODE=1）来解，
+/// 一次调用约 60ms，且只在日志真的增长时才调用。
+enum DSHLogReader {
+    private static let script = """
+    const fs=require("fs"),z=require("zlib");
+    const p=process.argv[1],start=+process.argv[2]||0;
+    const out={lines:[],next:start};
+    try{
+      const b=fs.readFileSync(p);
+      const M=Buffer.from([0x28,0xB5,0x2F,0xFD]);
+      let pos=[],i=start;
+      while(i<b.length){const k=b.indexOf(M,i);if(k<0)break;pos.push(k);i=k+4;}
+      for(let j=0;j<pos.length;j++){
+        const end=j+1<pos.length?pos[j+1]:b.length;
+        try{
+          const s=z.zstdDecompressSync(b.subarray(pos[j],end)).toString("utf8");
+          for(const l of s.split("\\n")) if(l) out.lines.push(l);
+          out.next=end;
+        }catch(e){break;}   // 末尾半帧：留着下次再解
+      }
+    }catch(e){}
+    console.log(JSON.stringify(out));
+    """
+
+    /// DSH 桌面版自带 node（就是它的主二进制），可用性决定 DSH 审批提醒开不开
+    static var nodePath: String? {
+        if let e = ProcessInfo.processInfo.environment["AGENTDONE_DSH_NODE"], !e.isEmpty,
+           FileManager.default.isExecutableFile(atPath: e) { return e }
+        if let e = ProcessInfo.processInfo.environment["DSH_DESKTOP_NODE_EXECUTABLE"], !e.isEmpty,
+           FileManager.default.isExecutableFile(atPath: e) { return e }
+        let candidates = [
+            "/Applications/DeepSeek Harness.app/Contents/MacOS/DeepSeek Harness",
+            NSHomeDirectory() + "/Applications/DeepSeek Harness.app/Contents/MacOS/DeepSeek Harness",
+        ]
+        return candidates.first { FileManager.default.isExecutableFile(atPath: $0) }
+    }
+
+    /// 读 offset 之后的新帧，返回解出的 JSONL 行和下次该读的位置
+    static func read(path: String, from offset: Int) -> (lines: [String], next: Int)? {
+        guard let node = nodePath else { return nil }
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: node)
+        p.arguments = ["-e", script, path, String(offset)]
+        var env = ProcessInfo.processInfo.environment
+        env["ELECTRON_RUN_AS_NODE"] = "1"
+        p.environment = env
+        let out = Pipe()
+        p.standardOutput = out
+        p.standardError = FileHandle.nullDevice
+        guard (try? p.run()) != nil else { return nil }
+        let data = out.fileHandleForReading.readDataToEndOfFile()
+        p.waitUntilExit()
+        guard let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return nil }
+        let lines = (obj["lines"] as? [String]) ?? []
+        let next = (obj["next"] as? Int) ?? offset
+        return (lines, next)
     }
 }
 
@@ -713,7 +863,7 @@ final class ZCodeWatcher {
             }
             let previous = last[taskId]
             last[taskId] = state
-            guard emit, primed, previous != state else { continue }
+            guard emit || (previous == nil && state == "working"), previous != state else { continue }
             let project = workspace.isEmpty ? "ZCode" : (workspace as NSString).lastPathComponent
             let detail = (status == "error" || status == "failed") ? "任务出错" : ""
             let ev = HookEvent(agent: "zcode", kind: state, sessionId: taskId, cwd: workspace,
@@ -938,7 +1088,7 @@ final class AntigravityWatcher {
 
             let previous = last[id]
             last[id] = state
-            guard emit, primed, previous != state else { continue }
+            guard emit || (previous == nil && state == "working"), previous != state else { continue }
             let title = m.title.isEmpty ? "" : String(m.title.prefix(60))
             let ev = HookEvent(agent: "antigravity", kind: state, sessionId: id, cwd: "",
                                project: "Antigravity", title: title,
@@ -1161,10 +1311,34 @@ final class RemoteWatcher {
     }
 
     func start() {
+        cleanupStale()
         timer = Timer.scheduledTimer(withTimeInterval: 15, repeats: true) { [weak self] _ in
             self?.refresh()
         }
         refresh()
+    }
+
+    /// 上一个实例被强杀时留在这里的 ssh（父进程已经是 1），顺手收掉。
+    /// 只认 /usr/bin/ssh 且带我们独有参数（ServerAliveCountMax=2）的进程，
+    /// 不碰 VS Code / 用户自己的连接。
+    private func cleanupStale() {
+        let sig = "ServerAliveCountMax=2"
+        let pg = Process()
+        pg.executableURL = URL(fileURLWithPath: "/usr/bin/pgrep")
+        pg.arguments = ["-f", sig]
+        let out = Pipe()
+        pg.standardOutput = out
+        pg.standardError = FileHandle.nullDevice
+        guard (try? pg.run()) != nil else { return }
+        let data = out.fileHandleForReading.readDataToEndOfFile()
+        pg.waitUntilExit()
+        for line in String(data: data, encoding: .utf8)?.split(separator: "\n") ?? [] {
+            guard let pid = pid_t(line.trimmingCharacters(in: .whitespaces)), pid > 0 else { continue }
+            var buf = [CChar](repeating: 0, count: 4096)
+            let n = proc_pidpath(pid, &buf, UInt32(buf.count))
+            guard n > 0, String(cString: buf).hasSuffix("/ssh") else { continue }
+            kill(pid, SIGTERM)
+        }
     }
 
     func targets() -> [String] {
@@ -1187,6 +1361,12 @@ final class RemoteWatcher {
         DispatchQueue.main.async {
             NotificationCenter.default.post(name: .agentDoneRemoteStatus, object: nil)
         }
+    }
+
+    /// 退出前收掉子进程，别把 ssh 留成孤儿
+    func shutdown() {
+        timer?.invalidate(); timer = nil
+        for host in conns.keys { teardown(host) }
     }
 
     private func teardown(_ host: String) {
@@ -1950,6 +2130,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // 目录可能刚建好，隔一下再起，避免拿到半截状态
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { self.startLocalWatchers() }
         }
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        remote?.shutdown()
+        stopLocalWatchers()
     }
 
     func anotherInstanceRunning() -> Bool {

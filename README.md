@@ -27,7 +27,7 @@
 | Codex CLI | 不需要 | 监听 `~/.codex/sessions/**/rollout-*.jsonl` 的 `task_complete`；`originator` 含 `cli` → 宿主显示"终端" |
 | Codex VS Code 扩展（`openai.codex`） | 不需要 | 同上，扩展写同一份日志；`originator` 含 `vscode` → 宿主显示 VS Code |
 | Codex 桌面 App（ChatGPT.app 内的 Codex） | 不需要 | 同上，`originator: Codex Desktop` / `codex_work_desktop` → 宿主显示"Codex 桌面" |
-| DeepSeek Harness | 不需要 | 读 `~/.dsh/storages/session_projcache`，用 `turnBoundary.openTurnStartSeq` 判断回合是否结束 |
+| DeepSeek Harness | 不需要 | 读 `~/.dsh/storages/session_projcache` 判断回合是否结束；审批读 `~/.dsh/sessions/**/session.v4.jsonl.zstd` 的 `approval/asked`（见下） |
 | Antigravity（Google 的 agent IDE） | 不需要 | 读 `~/.gemini/antigravity`：`conversation_summaries.db` 给标题和运行状态，`conversations/<id>.db` 的 `steps.status` 给细状态（`WAITING` 就是等你确认） |
 | ZCode（智谱 GLM 桌面 IDE） | 不需要 | 读 `~/.zcode/v2/tasks-index.sqlite`，`task_status` 由空变 `completed` 即为完成，`error` 记为"需要你" |
 | **远程集群**（VS Code Remote-SSH / devspace 里的 Codex、Claude） | 菜单栏 → 设置 → 勾选主机 | 见下面「远程集群」一节 |
@@ -139,6 +139,18 @@ Codex 的摘要长这样（批准后 `exec_command_begin` / `patch_apply_begin` 
 等待批准：修改 /user/me/mf-duplexDemo/config
 等待回答：要我用 4 卡还是 8 卡跑这次训练？
 ```
+
+### DeepSeek Harness 的审批
+
+DSH 把审批写进会话日志：`approval/asked`（含 `toolName` + `reason`）和 `approval/decided`。
+所以它也能提醒 —— 你在面板里会看到「待批准 · 等待批准：bash · <原因>」。
+
+这份日志是 **zstd 压缩、每事件一帧**，Swift 没有 zstd，所以借 DSH 桌面版自带的
+Electron 当 node 用（`ELECTRON_RUN_AS_NODE=1`）来解，一次调用约 60ms；
+并且**只读新增字节、只解新帧**，不会把几 MB 的日志整个解一遍。
+
+前提：DSH 桌面版装在 `/Applications`（或 `~/Applications`）。找不到就只是不做审批提醒，
+其它照常。想手工指定解释器路径，设 `AGENTDONE_DSH_NODE`。
 
 ## 远程集群（VS Code Remote-SSH / devspace）
 
