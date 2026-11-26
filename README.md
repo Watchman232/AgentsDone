@@ -193,7 +193,7 @@ Electron 当 node 用（`ELECTRON_RUN_AS_NODE=1`）来解，一次调用约 60ms
 （`vendor/`，arm64 + x86_64），直接装：
 
 ```bash
-git clone https://github.com/<你的账号>/AgentDone.git
+git clone https://github.com/Watchman232/AgentDone.git
 cd AgentDone
 ./install.sh
 ```
