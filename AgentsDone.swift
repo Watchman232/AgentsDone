@@ -4,6 +4,7 @@ import AppKit
 import SwiftUI
 import Darwin
 import SQLite3
+import Carbon.HIToolbox
 
 // MARK: - 事件与状态
 
@@ -76,6 +77,15 @@ func agentColor(_ a: String) -> Color {
 final class Store: ObservableObject {
     @Published var sessions: [Session] = [] { didSet { onChange?() } }
     @Published var muted = false { didSet { onChange?() } }
+    /// 静音到什么时候；nil 表示没在静音
+    @Published var snoozeUntil: Date? = nil { didSet { onChange?() } }
+
+    var snoozed: Bool {
+        guard let t = snoozeUntil else { return false }
+        return t > Date()
+    }
+    /// 现在该不该出声
+    var quiet: Bool { muted || snoozed }
     var onChange: (() -> Void)?
 
     var awaiting: Int { sessions.filter { $0.state != .working }.count }
@@ -1136,14 +1146,21 @@ struct AppConfig: Codable {
     /// DSH 桌面版的可执行文件；用来解压它的 zstd 会话日志（读审批事件）。
     /// 留空就按常见安装位置自动找。
     var dshNode: String = ""
+    /// 提示音名（NSSound 的名字）；空字符串表示不响
+    var sound: String = "Glass"
+    /// 全局快捷键 ⌥⌘A 打开面板
+    var hotkey: Bool = true
 
     init() {}
 
-    init(followVSCode: Bool, hosts: [RemoteEntry], paths: [String: String] = [:], dshNode: String = "") {
+    init(followVSCode: Bool, hosts: [RemoteEntry], paths: [String: String] = [:],
+         dshNode: String = "", sound: String = "Glass", hotkey: Bool = true) {
         self.followVSCode = followVSCode
         self.hosts = hosts
         self.paths = paths
         self.dshNode = dshNode
+        self.sound = sound
+        self.hotkey = hotkey
     }
 
     /// 手写解码：允许只写想要的那几个键（合成的 decoder 遇到缺键会整体失败）
@@ -1153,6 +1170,8 @@ struct AppConfig: Codable {
         hosts = try c.decodeIfPresent([RemoteEntry].self, forKey: .hosts) ?? []
         paths = try c.decodeIfPresent([String: String].self, forKey: .paths) ?? [:]
         dshNode = try c.decodeIfPresent(String.self, forKey: .dshNode) ?? ""
+        sound = try c.decodeIfPresent(String.self, forKey: .sound) ?? "Glass"
+        hotkey = try c.decodeIfPresent(Bool.self, forKey: .hotkey) ?? true
     }
 }
 
@@ -1324,6 +1343,10 @@ enum SSHConfig {
 extension Notification.Name {
     static let agentsDoneRemoteStatus = Notification.Name("agentsDone.remote.status")
     static let agentsDoneTestPill = Notification.Name("agentsDone.test.pill")
+    /// 静音一段时间：userInfo["minutes"]，0 表示取消静音
+    static let agentsDoneSnooze = Notification.Name("agentsDone.snooze")
+    /// 配置改过了（设置页保存后发一下，让热键等跟着变）
+    static let agentsDoneConfigChanged = Notification.Name("agentsDone.config.changed")
 }
 
 // MARK: - 远程监听（每个主机一条持久 ssh 流，只读增量字节）
@@ -1572,6 +1595,10 @@ final class SettingsModel: ObservableObject {
     @Published var message: String = ""
     @Published var busy: String = ""
     @Published var customHost: String = ""
+    @Published var sound: String = "Glass"
+    @Published var hotkey: Bool = true
+    /// 「静音 30 分钟」按下后按钮变成「取消静音」
+    @Published var snoozing: Bool = false
     var currentRemoteOverride: String?
 
     var currentRemote: String? {
@@ -1586,11 +1613,15 @@ final class SettingsModel: ObservableObject {
             entries = [RemoteEntry(host: "dev-cluster", enabled: true)]
             status = ["dev-cluster": "connected", "gpu-box-1": "idle", "gpu-box-2": "idle"]
             currentRemoteOverride = "dev-cluster"
+            sound = "Glass"
+            hotkey = true
             return
         }
         let cfg = ConfigStore.load()
         followVSCode = cfg.followVSCode
         entries = cfg.hosts
+        sound = cfg.sound
+        hotkey = cfg.hotkey
         reload()
     }
 
@@ -1603,8 +1634,10 @@ final class SettingsModel: ObservableObject {
         // 保存时把用户自己配的 paths / dshNode 带上，别被设置页覆盖掉
         let old = ConfigStore.load()
         ConfigStore.save(AppConfig(followVSCode: followVSCode, hosts: entries,
-                                   paths: old.paths, dshNode: old.dshNode))
+                                   paths: old.paths, dshNode: old.dshNode,
+                                   sound: sound, hotkey: hotkey))
         RemoteWatcher.shared.refresh()
+        NotificationCenter.default.post(name: .agentsDoneConfigChanged, object: nil)
     }
 
     func isEnabled(_ host: String) -> Bool { entries.first { $0.host == host }?.enabled ?? false }
@@ -1711,7 +1744,47 @@ struct SettingsView: View {
             Text("会依次弹出两条示例（完成 + 待批准），用来确认提醒是否正常；点一下浮窗会跳到对应会话。")
                 .font(.system(size: 11)).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
-                .padding(.horizontal, 16).padding(.bottom, 10)
+                .padding(.horizontal, 16).padding(.bottom, 8)
+
+            HStack(spacing: 8) {
+                Text("提示音").font(.system(size: 12))
+                Picker("", selection: $model.sound) {
+                    Text("Glass").tag("Glass")
+                    Text("Ping").tag("Ping")
+                    Text("Tink").tag("Tink")
+                    Text("Submarine").tag("Submarine")
+                    Text("无（静音）").tag("")
+                }
+                .labelsHidden().frame(width: 116)
+                .onChange(of: model.sound) { v in
+                    model.persist()
+                    NSSound(named: v)?.play()
+                }
+                Spacer()
+                if model.snoozing {
+                    Button("取消静音") {
+                        NotificationCenter.default.post(name: .agentsDoneSnooze, object: nil,
+                                                        userInfo: ["minutes": 0])
+                        model.snoozing = false
+                    }
+                    .buttonStyle(.plain).font(.system(size: 11)).foregroundStyle(Color.accentColor)
+                } else {
+                    Button("静音 30 分钟") {
+                        NotificationCenter.default.post(name: .agentsDoneSnooze, object: nil,
+                                                        userInfo: ["minutes": 30])
+                        model.snoozing = true
+                    }
+                    .buttonStyle(.plain).font(.system(size: 11)).foregroundStyle(Color.accentColor)
+                }
+            }
+            .padding(.horizontal, 16).padding(.bottom, 6)
+
+            Toggle(isOn: $model.hotkey) {
+                Text("全局快捷键 Option+Command+A 打开列表").font(.system(size: 12))
+            }
+            .toggleStyle(.switch).controlSize(.mini)
+            .onChange(of: model.hotkey) { _ in model.persist() }
+            .padding(.horizontal, 16).padding(.bottom, 10)
 
             Divider()
 
@@ -2372,6 +2445,43 @@ struct RowView: View {
     }
 }
 
+
+/// 全局快捷键（默认 ⌥⌘A）。Carbon 热键不需要辅助功能权限。
+private var hotKeyAction: (() -> Void)?
+
+final class HotKeyManager {
+    static let shared = HotKeyManager()
+    private var hotKeyRef: EventHotKeyRef?
+    private var handlerRef: EventHandlerRef?
+    private(set) var registered = false
+
+    @discardableResult
+    func install(_ action: @escaping () -> Void) -> Bool {
+        hotKeyAction = action
+        if hotKeyRef != nil { registered = true; return true }
+        guard handlerRef == nil else { return registered }
+
+        var spec = EventTypeSpec(eventClass: OSType(kEventClassKeyboard),
+                                 eventKind: UInt32(kEventHotKeyPressed))
+        InstallEventHandler(GetApplicationEventTarget(), { _, _, _ -> OSStatus in
+            hotKeyAction?()
+            return noErr
+        }, 1, &spec, nil, &handlerRef)
+
+        let id = EventHotKeyID(signature: OSType(0x4144_4E45), id: 1)   // 'ADNE'
+        let status = RegisterEventHotKey(UInt32(kVK_ANSI_A), UInt32(optionKey | cmdKey),
+                                         id, GetApplicationEventTarget(), 0, &hotKeyRef)
+        registered = (status == noErr)
+        return registered
+    }
+
+    func remove() {
+        if let ref = hotKeyRef { UnregisterEventHotKey(ref) }
+        hotKeyRef = nil
+        registered = false
+    }
+}
+
 // MARK: - App
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
@@ -2408,6 +2518,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NotificationCenter.default.addObserver(forName: .agentsDoneTestPill, object: nil,
                                                queue: .main) { [weak self] _ in
             self?.playTestPill()
+        }
+        NotificationCenter.default.addObserver(forName: .agentsDoneSnooze, object: nil,
+                                               queue: .main) { [weak self] note in
+            let minutes = (note.userInfo?["minutes"] as? Int) ?? 0
+            self?.store.snoozeUntil = minutes > 0 ? Date().addingTimeInterval(Double(minutes) * 60) : nil
+            self?.refreshIcon()
+        }
+        NotificationCenter.default.addObserver(forName: .agentsDoneConfigChanged, object: nil,
+                                               queue: .main) { _ in
+            let cfg = ConfigStore.load()
+            if cfg.hotkey { HotKeyManager.shared.install { [weak self] in self?.togglePopover() } }
+            else { HotKeyManager.shared.remove() }
+        }
+        if ConfigStore.load().hotkey {
+            let ok = HotKeyManager.shared.install { [weak self] in self?.togglePopover() }
+            NSLog("AgentsDone: 全局快捷键 ⌥⌘A %@", ok ? "已注册" : "注册失败（可能被别的 App 占用）")
         }
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         statusItem.button?.imagePosition = .imageLeading
@@ -2522,10 +2648,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             $0.id == "\(ev.agent):\(ev.sessionId ?? ev.cwd ?? "")"
         }) else { return }
         let isNew = !before.contains { $0.id == s.id && $0.state == s.state }
-        if isNew, !store.muted {
-            if ev.kind == "done" { NSSound(named: "Glass")?.play() }
-            pill.enqueue(s, onClick: { [weak self] in self?.jump(to: s) })
-        }
+        guard isNew else { return }
+        // 锁屏、静音、静音时段内都不弹；会话照样进列表，解锁后能补看
+        if screenIsLocked() || store.quiet { return }
+        if ev.kind == "done" { playSound(ConfigStore.load().sound) }
+        pill.enqueue(s, onClick: { [weak self] in self?.jump(to: s) })
+    }
+
+    /// 锁屏/熄屏时别打扰
+    func screenIsLocked() -> Bool {
+        guard let dict = CGSessionCopyCurrentDictionary() as? [String: Any] else { return false }
+        return (dict["CGSSessionScreenIsLocked"] as? Bool) ?? false
+    }
+
+    /// 播提示音；名字为空就静音
+    func playSound(_ name: String) {
+        guard !name.isEmpty else { return }
+        NSSound(named: name)?.play()
     }
 
     func refreshIcon() {

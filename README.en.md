@@ -78,9 +78,11 @@ Uninstall: `./uninstall.sh`
 
 ## Day to day
 
-- Click the 🔔 to open the list, click a row to jump back
+- Click the 🔔 to open the list, click a row to jump back — or press **Option+Command+A** from anywhere
 - The menu has **Mute** (no sound), **Clear** and **Quit**
-- Settings lets you turn off "follow the current VS Code remote", add remote hosts and see the data paths
+- Settings lets you pick the sound, snooze for 30 minutes, turn off "follow the current VS Code remote",
+  add remote hosts and see the data paths
+- While the screen is locked nothing pops up and nothing rings; sessions still land in the list
 
 ### Is it fully offline?
 

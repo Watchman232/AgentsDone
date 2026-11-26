@@ -1,0 +1,29 @@
+name: Something isn't showing up
+description: A session finished but AgentsDone stayed quiet / the list looks wrong
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        诊断信息里已经包含版本、路径和每个 Agent 的读取情况，但**不含任何会话内容**。
+        粘贴之前扫一眼有没有你不想公开的主机名。
+  - type: textarea
+    id: diag
+    attributes:
+      label: 诊断信息 / Diagnostics
+      description: 点 🔔 → 设置 → 诊断 → 复制诊断信息；或运行 `~/Applications/AgentsDone.app/Contents/MacOS/AgentsDone --diagnose`
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: 发生了什么 / What happened
+      description: 哪个 Agent、在哪个 App 里跑的、期望提醒但没有提醒（或反之）
+    validations:
+      required: true
+  - type: input
+    id: macos
+    attributes:
+      label: macOS 版本 / version
+      placeholder: 14.5 / 15.2 / 26.1
