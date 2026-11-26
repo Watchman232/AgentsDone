@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""在远端（集群）上安装/移除 AgentDone 的 Claude Code hooks。
+"""在远端（集群）上安装/移除 AgentsDone 的 Claude Code hooks。
 
     python3 install_hooks.py --install
     python3 install_hooks.py --remove
@@ -10,9 +10,9 @@ HOME = os.path.expanduser("~")
 # Claude 的配置目录：默认 ~/.claude，可用 CLAUDE_CONFIG_DIR 覆盖（与 Claude Code 本身一致）
 CLAUDE_DIR = os.path.expanduser(os.environ.get("CLAUDE_CONFIG_DIR") or os.path.join(HOME, ".claude"))
 SETTINGS = os.path.join(CLAUDE_DIR, "settings.json")
-# spool 落盘位置，可用 AGENTDONE_SPOOL 覆盖；安装时展开成绝对路径写进 hook
-SPOOL_PATH = os.path.expanduser(os.environ.get("AGENTDONE_SPOOL")
-                                or os.path.join(HOME, ".agentdone", "spool.jsonl"))
+# spool 落盘位置，可用 AGENTSDONE_SPOOL 覆盖；安装时展开成绝对路径写进 hook
+SPOOL_PATH = os.path.expanduser(os.environ.get("AGENTSDONE_SPOOL")
+                                or os.path.join(HOME, ".agentsdone", "spool.jsonl"))
 SPOOL = ("python3 -c \"import sys,json,os;"
          "p=" + repr(SPOOL_PATH) + ";"
          "os.makedirs(os.path.dirname(p),exist_ok=True);"
@@ -20,7 +20,7 @@ SPOOL = ("python3 -c \"import sys,json,os;"
          "e['_tp']=os.environ.get('TERM_PROGRAM','');"
          "open(p,'a').write(json.dumps(e,ensure_ascii=False)+chr(10))\"")
 EVENTS = ["Stop", "Notification", "PermissionRequest", "SessionStart", "PostToolUse", "SessionEnd"]
-MARK = "agentdone"
+MARK = "agentsdone"
 
 
 def load():
@@ -42,7 +42,7 @@ def real(p):
 
 def dump(obj, path):
     target = real(path)
-    tmp = target + ".agentdone-tmp"
+    tmp = target + ".agentsdone-tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(obj, f, ensure_ascii=False, indent=2, sort_keys=True)
         f.write("\n")
@@ -50,7 +50,7 @@ def dump(obj, path):
 
 
 def backup(path):
-    dst = "%s.agentdone-backup-%d" % (path, int(time.time()))
+    dst = "%s.agentsdone-backup-%d" % (path, int(time.time()))
     try:
         shutil.copy2(path, dst)
         print("    备份: %s" % dst)

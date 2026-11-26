@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""AgentDone 远端监听：把集群上的 Codex/Claude 事件吐成 NDJSON。
+"""AgentsDone 远端监听：把集群上的 Codex/Claude 事件吐成 NDJSON。
 
 用法（Mac 侧通过 ssh 喂进来）：  ssh <host> python3 - [--dump]
   --dump  只跑一轮并把历史全吐出来（调试用）
@@ -21,10 +21,10 @@ def _env_path(name, default):
     return os.path.expanduser(v) if v else default
 
 
-# Codex 的会话目录（默认 ~/.codex/sessions，可用 AGENTDONE_CODEX_ROOT 覆盖）
-CODEX_HOME = _env_path("AGENTDONE_CODEX_ROOT", os.path.join(HOME, ".codex"))
+# Codex 的会话目录（默认 ~/.codex/sessions，可用 AGENTSDONE_CODEX_ROOT 覆盖）
+CODEX_HOME = _env_path("AGENTSDONE_CODEX_ROOT", os.path.join(HOME, ".codex"))
 CODEX = os.path.join(CODEX_HOME, "sessions")
-SPOOL = _env_path("AGENTDONE_SPOOL", os.path.join(HOME, ".agentdone", "spool.jsonl"))
+SPOOL = _env_path("AGENTSDONE_SPOOL", os.path.join(HOME, ".agentsdone", "spool.jsonl"))
 DUMP = "--dump" in sys.argv
 INTERVAL = 1.5
 

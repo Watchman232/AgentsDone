@@ -1,4 +1,4 @@
-// AgentDone — 极轻量多 AI 编码会话「完成提醒」
+// AgentsDone — 极轻量多 AI 编码会话「完成提醒」
 // 单文件 AppKit + SwiftUI，无第三方依赖，编译：swiftc -O -parse-as-library
 import AppKit
 import SwiftUI
@@ -155,7 +155,7 @@ final class Store: ObservableObject {
 final class EventServer {
     private let path: String
     private var listenFD: Int32 = -1
-    private let queue = DispatchQueue(label: "agentdone.server", qos: .userInitiated)
+    private let queue = DispatchQueue(label: "agentsdone.server", qos: .userInitiated)
     var onEvent: ((HookEvent) -> Void)?
     var onStatus: (() -> Data)?
 
@@ -166,7 +166,7 @@ final class EventServer {
     private func run() {
         unlink(path)
         let fd = socket(AF_UNIX, SOCK_STREAM, 0)
-        guard fd >= 0 else { NSLog("AgentDone: socket() failed"); return }
+        guard fd >= 0 else { NSLog("AgentsDone: socket() failed"); return }
         var addr = sockaddr_un()
         addr.sun_family = sa_family_t(AF_UNIX)
         let capacity = MemoryLayout.size(ofValue: addr.sun_path)
@@ -181,7 +181,7 @@ final class EventServer {
         let bound = withUnsafePointer(to: &addr) {
             $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { bind(fd, $0, len) }
         }
-        guard bound == 0 else { NSLog("AgentDone: bind failed \(errno)"); close(fd); return }
+        guard bound == 0 else { NSLog("AgentsDone: bind failed \(errno)"); close(fd); return }
         chmod(path, 0o600)
         guard listen(fd, 32) == 0 else { close(fd); return }
         listenFD = fd
@@ -225,7 +225,7 @@ final class EventServer {
 ///    直接取会得到一个满屏 UUID 的链接，所以要先剥链接再判断值不值得用
 enum CodexTitle {
     static var home: String {
-        if let e = ProcessInfo.processInfo.environment["AGENTDONE_CODEX_DB"], !e.isEmpty { return e }
+        if let e = ProcessInfo.processInfo.environment["AGENTSDONE_CODEX_DB"], !e.isEmpty { return e }
         return AgentPaths.base("codex")
     }
 
@@ -389,7 +389,7 @@ final class CodexWatcher {
             me.scan()
         }, &ctx, [root] as CFArray, FSEventStreamEventId(kFSEventStreamEventIdSinceNow), 0.25, flags)
         guard let stream else { return }
-        FSEventStreamSetDispatchQueue(stream, DispatchQueue(label: "agentdone.codex"))
+        FSEventStreamSetDispatchQueue(stream, DispatchQueue(label: "agentsdone.codex"))
         FSEventStreamStart(stream)
         scan()
     }
@@ -586,7 +586,7 @@ final class DSHWatcher {
             Unmanaged<DSHWatcher>.fromOpaque(info).takeUnretainedValue().scan()
         }, &ctx, [root] as CFArray, FSEventStreamEventId(kFSEventStreamEventIdSinceNow), 0.4, flags)
         guard let stream else { return }
-        FSEventStreamSetDispatchQueue(stream, DispatchQueue(label: "agentdone.dsh"))
+        FSEventStreamSetDispatchQueue(stream, DispatchQueue(label: "agentsdone.dsh"))
         FSEventStreamStart(stream)
         scan()
         startLogTail()
@@ -596,7 +596,7 @@ final class DSHWatcher {
     private func startLogTail() {
         guard DSHLogReader.nodePath != nil else { return }
         scanLogs(emit: false)
-        let t = DispatchSource.makeTimerSource(queue: DispatchQueue(label: "agentdone.dsh.log"))
+        let t = DispatchSource.makeTimerSource(queue: DispatchQueue(label: "agentsdone.dsh.log"))
         t.schedule(deadline: .now() + 2, repeating: 2)
         t.setEventHandler { [weak self] in self?.scanLogs(emit: true) }
         t.resume()
@@ -764,7 +764,7 @@ enum DSHLogReader {
             let full = AgentPaths.expand(p)
             return FileManager.default.isExecutableFile(atPath: full) ? full : nil
         }
-        if let p = usable(ProcessInfo.processInfo.environment["AGENTDONE_DSH_NODE"]) { return p }
+        if let p = usable(ProcessInfo.processInfo.environment["AGENTSDONE_DSH_NODE"]) { return p }
         if let p = usable(ProcessInfo.processInfo.environment["DSH_DESKTOP_NODE_EXECUTABLE"]) { return p }
         if let p = usable(ConfigStore.load().dshNode) { return p }
         let home = NSHomeDirectory()
@@ -832,7 +832,7 @@ final class ZCodeWatcher {
             Unmanaged<ZCodeWatcher>.fromOpaque(info).takeUnretainedValue().scan(emit: true)
         }, &ctx, [dir] as CFArray, FSEventStreamEventId(kFSEventStreamEventIdSinceNow), 0.6, flags)
         guard let stream else { return }
-        FSEventStreamSetDispatchQueue(stream, DispatchQueue(label: "agentdone.zcode"))
+        FSEventStreamSetDispatchQueue(stream, DispatchQueue(label: "agentsdone.zcode"))
         FSEventStreamStart(stream)
     }
 
@@ -936,12 +936,12 @@ final class AntigravityWatcher {
             Unmanaged<AntigravityWatcher>.fromOpaque(info).takeUnretainedValue().scan(emit: true)
         }, &ctx, [dir] as CFArray, FSEventStreamEventId(kFSEventStreamEventIdSinceNow), 0.5, flags)
         if let stream {
-            FSEventStreamSetDispatchQueue(stream, DispatchQueue(label: "agentdone.antigravity"))
+            FSEventStreamSetDispatchQueue(stream, DispatchQueue(label: "agentsdone.antigravity"))
             FSEventStreamStart(stream)
         }
 
         // sqlite 的 WAL 落盘不一定会触发 FSEvent，再兜一层轮询
-        let t = DispatchSource.makeTimerSource(queue: DispatchQueue(label: "agentdone.antigravity.poll"))
+        let t = DispatchSource.makeTimerSource(queue: DispatchQueue(label: "agentsdone.antigravity.poll"))
         t.schedule(deadline: .now() + 2, repeating: 3)
         t.setEventHandler { [weak self] in
             guard let self, self.touched() else { return }
@@ -1105,12 +1105,12 @@ final class AntigravityWatcher {
     }
 }
 
-// MARK: - 配置：远程主机（~/.agentdone/config.json）
+// MARK: - 配置：远程主机（~/.agentsdone/config.json）
 
 struct RemoteEntry: Codable, Identifiable, Equatable {
     var host: String
     var enabled: Bool
-    /// 这台机器上非默认的数据目录，键：codex（AGENTDONE_CODEX_ROOT）、claude（CLAUDE_CONFIG_DIR）
+    /// 这台机器上非默认的数据目录，键：codex（AGENTSDONE_CODEX_ROOT）、claude（CLAUDE_CONFIG_DIR）
     var paths: [String: String] = [:]
     var id: String { host }
 
@@ -1158,10 +1158,10 @@ struct AppConfig: Codable {
 
 enum ConfigStore {
     static var dir: String {
-        if let e = ProcessInfo.processInfo.environment["AGENTDONE_CONFIG_DIR"], !e.isEmpty {
+        if let e = ProcessInfo.processInfo.environment["AGENTSDONE_CONFIG_DIR"], !e.isEmpty {
             return AgentPaths.expand(e)
         }
-        return NSHomeDirectory() + "/.agentdone"
+        return NSHomeDirectory() + "/.agentsdone"
     }
     static var path: String { dir + "/config.json" }
 
@@ -1208,11 +1208,11 @@ enum AgentPaths {
 
     static func envKey(_ key: String) -> String {
         switch key {
-        case "claude": return "AGENTDONE_CLAUDE_ROOT"
-        case "codex": return "AGENTDONE_CODEX_HOME"
-        case "dsh": return "AGENTDONE_DSH_HOME"
-        case "zcode": return "AGENTDONE_ZCODE_ROOT"
-        default: return "AGENTDONE_ANTIGRAVITY_ROOT"
+        case "claude": return "AGENTSDONE_CLAUDE_ROOT"
+        case "codex": return "AGENTSDONE_CODEX_HOME"
+        case "dsh": return "AGENTSDONE_DSH_HOME"
+        case "zcode": return "AGENTSDONE_ZCODE_ROOT"
+        default: return "AGENTSDONE_ANTIGRAVITY_ROOT"
         }
     }
 
@@ -1224,20 +1224,20 @@ enum AgentPaths {
 
     /// Codex 的 sessions 目录（测试可以直接指到 sessions）
     static func codexSessions() -> String {
-        if let e = ProcessInfo.processInfo.environment["AGENTDONE_CODEX_ROOT"], !e.isEmpty { return expand(e) }
+        if let e = ProcessInfo.processInfo.environment["AGENTSDONE_CODEX_ROOT"], !e.isEmpty { return expand(e) }
         return base("codex") + "/sessions"
     }
 
     /// DSH 的会话日志目录（审批事件在里面）
     static func dshLogs() -> String {
-        if let e = ProcessInfo.processInfo.environment["AGENTDONE_DSH_LOGS"], !e.isEmpty {
+        if let e = ProcessInfo.processInfo.environment["AGENTSDONE_DSH_LOGS"], !e.isEmpty {
             return expand(e)
         }
         return base("dsh") + "/sessions"
     }
 
     static func dshSessions() -> String {
-        if let e = ProcessInfo.processInfo.environment["AGENTDONE_DSH_ROOT"], !e.isEmpty { return expand(e) }
+        if let e = ProcessInfo.processInfo.environment["AGENTSDONE_DSH_ROOT"], !e.isEmpty { return expand(e) }
         return base("dsh") + "/storages/session_projcache/sessions"
     }
 }
@@ -1322,7 +1322,7 @@ enum SSHConfig {
 }
 
 extension Notification.Name {
-    static let agentDoneRemoteStatus = Notification.Name("agentDone.remote.status")
+    static let agentsDoneRemoteStatus = Notification.Name("agentsDone.remote.status")
 }
 
 // MARK: - 远程监听（每个主机一条持久 ssh 流，只读增量字节）
@@ -1393,7 +1393,7 @@ final class RemoteWatcher {
 
     private func notifyStatus() {
         DispatchQueue.main.async {
-            NotificationCenter.default.post(name: .agentDoneRemoteStatus, object: nil)
+            NotificationCenter.default.post(name: .agentsDoneRemoteStatus, object: nil)
         }
     }
 
@@ -1411,7 +1411,7 @@ final class RemoteWatcher {
     static func loadScript() -> String? {
         let exe = URL(fileURLWithPath: CommandLine.arguments[0]).deletingLastPathComponent()
         let candidates = [
-            NSHomeDirectory() + "/.agentdone/remote/remote_watch.py",
+            NSHomeDirectory() + "/.agentsdone/remote/remote_watch.py",
             exe.appendingPathComponent("../remote/remote_watch.py").standardizedFileURL.path,
             exe.appendingPathComponent("remote/remote_watch.py").standardizedFileURL.path,
         ]
@@ -1436,7 +1436,7 @@ final class RemoteWatcher {
                     "-o", "StrictHostKeyChecking=accept-new", host]
         // 非默认目录：作为环境变量缀在远端命令前面（远端脚本里再 expanduser）
         if let entry = ConfigStore.load().hosts.first(where: { $0.host == host }) {
-            if let c = entry.paths["codex"], !c.isEmpty { args.append("AGENTDONE_CODEX_ROOT=\(shellQuote(c))") }
+            if let c = entry.paths["codex"], !c.isEmpty { args.append("AGENTSDONE_CODEX_ROOT=\(shellQuote(c))") }
             if let c = entry.paths["claude"], !c.isEmpty { args.append("CLAUDE_CONFIG_DIR=\(shellQuote(c))") }
         }
         args += ["python3", "-"]
@@ -1537,7 +1537,7 @@ final class RemoteWatcher {
 
     /// 安装远端 Claude hooks：脚本经 stdin 送入，远端不落地任何文件
     static func installHooks(_ host: String) -> String {
-        let local = NSHomeDirectory() + "/.agentdone/remote/install_hooks.py"
+        let local = NSHomeDirectory() + "/.agentsdone/remote/install_hooks.py"
         let fallback = URL(fileURLWithPath: CommandLine.arguments[0]).deletingLastPathComponent()
             .appendingPathComponent("../remote/install_hooks.py").standardizedFileURL.path
         guard let src = (try? String(contentsOfFile: local, encoding: .utf8))
@@ -1549,7 +1549,7 @@ final class RemoteWatcher {
     }
 
     static func removeHooks(_ host: String) -> String {
-        let local = NSHomeDirectory() + "/.agentdone/remote/install_hooks.py"
+        let local = NSHomeDirectory() + "/.agentsdone/remote/install_hooks.py"
         let fallback = URL(fileURLWithPath: CommandLine.arguments[0]).deletingLastPathComponent()
             .appendingPathComponent("../remote/install_hooks.py").standardizedFileURL.path
         guard let src = (try? String(contentsOfFile: local, encoding: .utf8))
@@ -1852,7 +1852,7 @@ final class SettingsWindowController {
             let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 480, height: 516),
                              styleMask: [.titled, .closable],
                              backing: .buffered, defer: false)
-            w.title = "AgentDone · 远程设置"
+            w.title = "AgentsDone · 远程设置"
             w.contentViewController = NSHostingController(rootView: SettingsView(model: SettingsModel()))
             w.isReleasedWhenClosed = false
             w.center()
@@ -1966,7 +1966,7 @@ struct PanelView: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 6) {
-                Text("AgentDone").font(.system(size: 12, weight: .semibold))
+                Text("AgentsDone").font(.system(size: 12, weight: .semibold))
                 Spacer()
                 Text(headerSummary)
                     .font(.system(size: 11)).foregroundStyle(.secondary)
@@ -2126,7 +2126,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         store.onChange = { [weak self] in self?.refreshIcon() }
 
         if anotherInstanceRunning() {
-            NSLog("AgentDone: 已有实例在运行，本次退出")
+            NSLog("AgentsDone: 已有实例在运行，本次退出")
             NSApp.terminate(nil)
             return
         }
@@ -2145,7 +2145,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         watchConfig()
     }
 
-    /// 数据目录可能写在 ~/.agentdone/config.json，改了要能生效
+    /// 数据目录可能写在 ~/.agentsdone/config.json，改了要能生效
     private func startLocalWatchers() {
         let w = CodexWatcher()
         w.onEvent = { [weak self] ev in self?.handle(ev) }
@@ -2183,7 +2183,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if self.configSig.isEmpty { self.configSig = sig; return }
             guard sig != self.configSig else { return }
             self.configSig = sig
-            NSLog("AgentDone: 配置变了，重载数据目录")
+            NSLog("AgentsDone: 配置变了，重载数据目录")
             self.stopLocalWatchers()
             // 目录可能刚建好，隔一下再起，避免拿到半截状态
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { self.startLocalWatchers() }
@@ -2218,7 +2218,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func sockPath() -> String {
-        ProcessInfo.processInfo.environment["AGENTDONE_SOCK"] ?? "/tmp/agentdone-\(getuid()).sock"
+        ProcessInfo.processInfo.environment["AGENTSDONE_SOCK"] ?? "/tmp/agentsdone-\(getuid()).sock"
     }
 
     func handle(_ ev: HookEvent) {
@@ -2239,11 +2239,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard let button = statusItem?.button else { return }
         let n = store.awaiting
         let symbol = n > 0 ? "bell.badge.fill" : "bell"
-        let img = NSImage(systemSymbolName: symbol, accessibilityDescription: "AgentDone")
+        let img = NSImage(systemSymbolName: symbol, accessibilityDescription: "AgentsDone")
         img?.isTemplate = true
         button.image = img
         button.title = n > 0 ? " \(n)" : ""
-        button.toolTip = n > 0 ? "\(n) 个会话等待你" : "AgentDone"
+        button.toolTip = n > 0 ? "\(n) 个会话等待你" : "AgentsDone"
     }
 
     @objc func togglePopover() {
@@ -2387,7 +2387,7 @@ extension Snapshot {
 // MARK: - main
 
 @main
-struct AgentDoneMain {
+struct AgentsDoneMain {
     static func main() {
         let args = CommandLine.arguments
         if let i = args.firstIndex(of: "--snapshot"), i + 1 < args.count {

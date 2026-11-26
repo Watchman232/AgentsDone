@@ -1,4 +1,4 @@
-# AgentDone
+# AgentsDone
 
 极轻量的 macOS 菜单栏小工具：**同时开很多 AI 编码会话时，哪个跑完了、哪个在等你，一眼看见。**
 
@@ -41,15 +41,15 @@
 | 磁盘 / 内存 | 约 2.5 MB / 常驻约 37 MB |
 
 ```bash
-git clone https://github.com/Watchman232/AgentDone.git
-cd AgentDone
+git clone https://github.com/Watchman232/AgentsDone.git
+cd AgentsDone
 ./install.sh
 ```
 
 没有 git 就网页右上 **Code → Download ZIP**，解压后进目录跑 `./install.sh`（脚本会自己清掉 quarantine 标记）。
 
-装完你会看到：菜单栏多一个 🔔、`~/Applications/AgentDone.app`、`~/.agentdone/`（采集端），
-以及登录自启（`~/Library/LaunchAgents/dev.agentdone.app.plist`，意外退出会被自动拉起）。
+装完你会看到：菜单栏多一个 🔔、`~/Applications/AgentsDone.app`、`~/.agentsdone/`（采集端），
+以及登录自启（`~/Library/LaunchAgents/dev.agentsdone.app.plist`，意外退出会被自动拉起）。
 
 脚本只做四件事：装 App → 装采集端 → 合并 hooks 进 `~/.claude/settings.json`（先备份，保留你原有的）→ 注册登录自启。
 **全程不联网、不下载、不装任何依赖。**
@@ -65,7 +65,7 @@ cd AgentDone
 ### 完全离线吗
 
 是。不发遥测、不调用任何模型 API，代码里没有任何 HTTP 请求；数据全部来自本机文件，
-Claude 的事件走 unix socket（`/tmp/agentdone-<uid>.sock`，权限 0600），不监听 TCP 端口。
+Claude 的事件走 unix socket（`/tmp/agentsdone-<uid>.sock`，权限 0600），不监听 TCP 端口。
 
 唯一的网络行为是**可选**功能「远端集群」：你在设置里勾选主机后才会 `ssh` 过去读日志，不配就完全不联网。
 
@@ -81,7 +81,7 @@ VS Code Remote-SSH 或者直接连开发机跑 Codex/Claude 时，本机 App 也
 ## 配置（通常不用）
 
 五个 Agent 都按各自的默认位置找数据。换过盘、用过便携版、或远端目录不标准时，改
-`~/.agentdone/config.json`（设置页里有「打开配置文件」）：
+`~/.agentsdone/config.json`（设置页里有「打开配置文件」）：
 
 ```json
 {
@@ -93,7 +93,7 @@ VS Code Remote-SSH 或者直接连开发机跑 Codex/Claude 时，本机 App 也
 
 - 支持 `~`，没写的键用默认值；改完 3 秒内自动生效，不用重启
 - 路径写错不会报错，那个 Agent 静默不出现
-- 看当前实际读了哪里：`~/Applications/AgentDone.app/Contents/MacOS/AgentDone --paths`
+- 看当前实际读了哪里：`~/Applications/AgentsDone.app/Contents/MacOS/AgentsDone --paths`
 
 DSH 的审批提醒要借 DSH 桌面版自带的引擎解压它的 zstd 日志，装在 `/Applications` 或
 `~/Applications` 会自动找到；装在别处就配 `dshNode` 指过去（找不到只影响这一项提醒）。
@@ -101,10 +101,10 @@ DSH 的审批提醒要借 DSH 桌面版自带的引擎解压它的 zstd 日志�
 <details>
 <summary>环境变量（测试/多实例用，日常不用管）</summary>
 
-`AGENTDONE_CONFIG_DIR` · `AGENTDONE_HOME` · `AGENTDONE_SOCK` · `PREFIX`（安装目录）
-· `AGENTDONE_CLAUDE_ROOT` · `CODEX_HOME` / `AGENTDONE_CODEX_ROOT` · `AGENTDONE_DSH_HOME` /
-`AGENTDONE_DSH_ROOT` / `AGENTDONE_DSH_LOGS` / `AGENTDONE_DSH_NODE` · `AGENTDONE_ZCODE_ROOT`
-· `AGENTDONE_ANTIGRAVITY_ROOT` · `AGENTDONE_REMOTE=0`（关远端） · `AGENTDONE_NO_LAUNCH=1`
+`AGENTSDONE_CONFIG_DIR` · `AGENTSDONE_HOME` · `AGENTSDONE_SOCK` · `PREFIX`（安装目录）
+· `AGENTSDONE_CLAUDE_ROOT` · `CODEX_HOME` / `AGENTSDONE_CODEX_ROOT` · `AGENTSDONE_DSH_HOME` /
+`AGENTSDONE_DSH_ROOT` / `AGENTSDONE_DSH_LOGS` / `AGENTSDONE_DSH_NODE` · `AGENTSDONE_ZCODE_ROOT`
+· `AGENTSDONE_ANTIGRAVITY_ROOT` · `AGENTSDONE_REMOTE=0`（关远端） · `AGENTSDONE_NO_LAUNCH=1`
 
 </details>
 
@@ -113,7 +113,7 @@ DSH 的审批提醒要借 DSH 桌面版自带的引擎解压它的 zstd 日志�
 - hook 里任何异常都 `exit 0`，不会卡住或影响 Claude Code / Codex
 - 不会改你的 `~/.codex/config.toml`；如果你之前用 `codex notify` 接过别的工具，原样保留
 - 首次安装后需要**新开**一个 Claude Code 会话，hook 才会被读取
-- 源码只有两个 Swift 文件（`AgentDone.swift`、`bin/agentdone-hook.swift`），无第三方依赖；
+- 源码只有两个 Swift 文件（`AgentsDone.swift`、`bin/agentsdone-hook.swift`），无第三方依赖；
   改完跑 `./build.sh` 重新生成 `vendor/`
 
 ## 协议

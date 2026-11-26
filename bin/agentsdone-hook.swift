@@ -1,5 +1,5 @@
-// agentdone-hook — Claude Code hooks / Codex notify 的采集端（Swift，无 python 依赖）
-// 编译：swiftc -O -target arm64-apple-macos12.0 -sdk <SDK> agentdone-hook.swift -o agentdone-hook
+// agentsdone-hook — Claude Code hooks / Codex notify 的采集端（Swift，无 python 依赖）
+// 编译：swiftc -O -target arm64-apple-macos12.0 -sdk <SDK> agentsdone-hook.swift -o agentsdone-hook
 import Foundation
 import Darwin
 
@@ -7,9 +7,9 @@ import Darwin
 private func c_proc_pidpath(_ pid: Int32, _ buffer: UnsafeMutableRawPointer?, _ buffersize: UInt32) -> Int32
 
 let ENV = ProcessInfo.processInfo.environment
-let SOCK = ENV["AGENTDONE_SOCK"] ?? "/tmp/agentdone-\(getuid()).sock"
-/// 安装目录，默认 ~/.agentdone（安装脚本与本程序保持一致）
-let AGENTDONE_HOME = ENV["AGENTDONE_HOME"].flatMap { $0.isEmpty ? nil : $0 } ?? (NSHomeDirectory() + "/.agentdone")
+let SOCK = ENV["AGENTSDONE_SOCK"] ?? "/tmp/agentsdone-\(getuid()).sock"
+/// 安装目录，默认 ~/.agentsdone（安装脚本与本程序保持一致）
+let AGENTSDONE_HOME = ENV["AGENTSDONE_HOME"].flatMap { $0.isEmpty ? nil : $0 } ?? (NSHomeDirectory() + "/.agentsdone")
 
 // MARK: - 宿主识别
 
@@ -286,9 +286,9 @@ func homeDir() -> String {
     ProcessInfo.processInfo.environment["HOME"] ?? NSHomeDirectory()
 }
 
-/// ~/.agentdone/config.json 里的 paths（数据目录可配置）
+/// ~/.agentsdone/config.json 里的 paths（数据目录可配置）
 func configPaths() -> [String: String] {
-    guard let d = FileManager.default.contents(atPath: homeDir() + "/.agentdone/config.json"),
+    guard let d = FileManager.default.contents(atPath: homeDir() + "/.agentsdone/config.json"),
           let obj = try? JSONSerialization.jsonObject(with: d) as? [String: Any],
           let paths = obj["paths"] as? [String: String] else { return [:] }
     return paths
@@ -302,7 +302,7 @@ func expand(_ p: String) -> String {
 
 /// Claude 的配置目录：CLAUDE_CONFIG_DIR > config.json 的 paths.claude > ~/.claude
 func claudeDir() -> String {
-    if let e = ProcessInfo.processInfo.environment["AGENTDONE_CLAUDE_ROOT"], !e.isEmpty { return expand(e) }
+    if let e = ProcessInfo.processInfo.environment["AGENTSDONE_CLAUDE_ROOT"], !e.isEmpty { return expand(e) }
     if let e = ProcessInfo.processInfo.environment["CLAUDE_CONFIG_DIR"], !e.isEmpty { return expand(e) }
     if let d = configPaths()["claude"], !d.isEmpty { return expand(d) }
     return homeDir() + "/.claude"
@@ -321,7 +321,7 @@ func readSettings(_ path: String) -> [String: Any]? {
 
 func backup(_ path: String) {
     let ts = Int(Date().timeIntervalSince1970)
-    let dst = "\(path).agentdone-backup-\(ts)"
+    let dst = "\(path).agentsdone-backup-\(ts)"
     do {
         try FileManager.default.copyItem(atPath: path, toPath: dst)
         print("    备份: \(dst)")
@@ -346,7 +346,7 @@ func writeSettings(_ obj: [String: Any], to path: String) -> Bool {
 
 func installHooks() -> Int32 {
     let path = settingsPath()
-    let hookBin = AGENTDONE_HOME + "/agentdone-hook"
+    let hookBin = AGENTSDONE_HOME + "/agentsdone-hook"
     try? FileManager.default.createDirectory(atPath: (path as NSString).deletingLastPathComponent,
                                              withIntermediateDirectories: true)
     guard var root = readSettings(path) else {
@@ -361,7 +361,7 @@ func installHooks() -> Int32 {
         var entries = (hooks[event] as? [[String: Any]]) ?? []
         let already = entries.contains { e in
             guard let inner = e["hooks"] as? [[String: Any]] else { return false }
-            return inner.contains { (($0["command"] as? String) ?? "").contains("agentdone-hook") }
+            return inner.contains { (($0["command"] as? String) ?? "").contains("agentsdone-hook") }
         }
         if already { continue }
         entries.append(["hooks": [["type": "command", "command": cmd, "timeout": 5]]])
@@ -391,7 +391,7 @@ func removeHooks() -> Int32 {
         guard let entries = hooks[event] as? [[String: Any]] else { continue }
         let kept = entries.filter { e in
             guard let inner = e["hooks"] as? [[String: Any]] else { return true }
-            return !inner.contains { (($0["command"] as? String) ?? "").contains("agentdone-hook") }
+            return !inner.contains { (($0["command"] as? String) ?? "").contains("agentsdone-hook") }
         }
         if kept.count != entries.count {
             changed = true
@@ -402,15 +402,15 @@ func removeHooks() -> Int32 {
     backup(path)
     if hooks.isEmpty { root.removeValue(forKey: "hooks") } else { root["hooks"] = hooks }
     guard writeSettings(root, to: path) else { return 1 }
-    print("    已从 \(path) 移除 AgentDone hooks")
+    print("    已从 \(path) 移除 AgentsDone hooks")
     return 0
 }
 
 // MARK: - 远端（VS Code Remote / devspace）安装
 
 func discoverRemoteHost() -> String? {
-    if let r = ProcessInfo.processInfo.environment["AGENTDONE_REMOTE"], !r.isEmpty { return r }
-    let list = homeDir() + "/.agentdone/remotes"
+    if let r = ProcessInfo.processInfo.environment["AGENTSDONE_REMOTE"], !r.isEmpty { return r }
+    let list = homeDir() + "/.agentsdone/remotes"
     if let txt = try? String(contentsOfFile: list, encoding: .utf8) {
         for raw in txt.split(separator: "\n") {
             let line = raw.trimmingCharacters(in: .whitespaces)
@@ -441,7 +441,7 @@ func runCmd(_ path: String, _ arguments: [String]) -> Int32 {
 
 func remoteHooks(remove: Bool) -> Int32 {
     guard let host = discoverRemoteHost() else {
-        print("    未发现远程主机（没有 VS Code Remote 连接，也没有 ~/.agentdone/remotes）")
+        print("    未发现远程主机（没有 VS Code Remote 连接，也没有 ~/.agentsdone/remotes）")
         return 0
     }
     let opts = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=8", "-o", "StrictHostKeyChecking=accept-new"]
@@ -450,9 +450,9 @@ func remoteHooks(remove: Bool) -> Int32 {
         return 0
     }
 
-    guard let script = try? String(contentsOfFile: homeDir() + "/.agentdone/remote/install_hooks.py",
+    guard let script = try? String(contentsOfFile: homeDir() + "/.agentsdone/remote/install_hooks.py",
                                    encoding: .utf8) else {
-        print("    ! 缺少 ~/.agentdone/remote/install_hooks.py")
+        print("    ! 缺少 ~/.agentsdone/remote/install_hooks.py")
         return 0
     }
 
@@ -478,7 +478,7 @@ func remoteHooks(remove: Bool) -> Int32 {
 
 func printStatus() -> Int32 {
     guard let fd = send(["cmd": "status"], timeout: 1.0) else {
-        print("AgentDone 没有在运行（或 socket 不存在）")
+        print("AgentsDone 没有在运行（或 socket 不存在）")
         return 1
     }
     defer { close(fd) }

@@ -42,10 +42,10 @@ build_one() {
     lipo -info "$VENDOR/${out}"
 }
 
-echo "构建 AgentDone"
-build_one AgentDone.swift AgentDone "-parse-as-library"
-echo "构建 agentdone-hook"
-build_one bin/agentdone-hook.swift agentdone-hook
+echo "构建 AgentsDone"
+build_one AgentsDone.swift AgentsDone "-parse-as-library"
+echo "构建 agentsdone-hook"
+build_one bin/agentsdone-hook.swift agentsdone-hook
 
 rm -rf "$BUILD/mcache"
 echo "完成 -> vendor/"
