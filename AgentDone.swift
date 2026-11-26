@@ -2284,6 +2284,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 // MARK: - 预览图渲染（--snapshot）
 
 enum Snapshot {
+    /// 离屏渲染成 PNG。默认 3 倍分辨率：GitHub 按 CSS 像素显示，
+    /// 2 倍在 Retina 上等于一个图像像素对两个物理像素，看着发虚。
+    static func writePNG(_ view: NSView, to path: String, scale: CGFloat = 3) {
+        view.layoutSubtreeIfNeeded()
+        let w = Int((view.bounds.width * scale).rounded())
+        let h = Int((view.bounds.height * scale).rounded())
+        guard w > 0, h > 0,
+              let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: w, pixelsHigh: h,
+                                         bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true,
+                                         isPlanar: false, colorSpaceName: .deviceRGB,
+                                         bytesPerRow: 0, bitsPerPixel: 0) else { return }
+        rep.size = view.bounds.size          // 关键：告诉 AppKit 按 scale 倍绘制
+        view.cacheDisplay(in: view.bounds, to: rep)
+        guard let png = rep.representation(using: .png, properties: [:]) else { return }
+        try? png.write(to: URL(fileURLWithPath: path))
+        print("snapshot -> \(path) (\(w)x\(h))")
+    }
+
     static func renderEmpty(path: String) {
         let store = Store()
         let view = NSHostingView(rootView: PanelView(store: store, onJump: { _ in }, onClear: {}, onMute: {}))
@@ -2292,11 +2310,7 @@ enum Snapshot {
         let size = view.fittingSize
         view.frame = NSRect(origin: .zero, size: CGSize(width: 340, height: max(size.height, 150)))
         view.layoutSubtreeIfNeeded()
-        guard let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return }
-        view.cacheDisplay(in: view.bounds, to: rep)
-        guard let png = rep.representation(using: .png, properties: [:]) else { return }
-        try? png.write(to: URL(fileURLWithPath: path))
-        print("snapshot -> \(path)")
+        writePNG(view, to: path)
     }
 
     static func render(path: String) {
@@ -2340,11 +2354,7 @@ enum Snapshot {
         let size = view.fittingSize
         view.frame = NSRect(origin: .zero, size: CGSize(width: 340, height: max(size.height, 220)))
         view.layoutSubtreeIfNeeded()
-        guard let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return }
-        view.cacheDisplay(in: view.bounds, to: rep)
-        guard let png = rep.representation(using: .png, properties: [:]) else { return }
-        try? png.write(to: URL(fileURLWithPath: path))
-        print("snapshot -> \(path)")
+        writePNG(view, to: path)
     }
 }
 
@@ -2355,11 +2365,7 @@ extension Snapshot {
         let host = NSHostingView(rootView: view)
         host.frame = NSRect(x: 0, y: 0, width: 480, height: 640)
         host.layoutSubtreeIfNeeded()
-        guard let rep = host.bitmapImageRepForCachingDisplay(in: host.bounds) else { return }
-        host.cacheDisplay(in: host.bounds, to: rep)
-        guard let data = rep.representation(using: .png, properties: [:]) else { return }
-        try? data.write(to: URL(fileURLWithPath: path))
-        print("settings -> \(path)")
+        writePNG(host, to: path)
     }
 
     static func renderPill(path: String) {
@@ -2367,15 +2373,14 @@ extension Snapshot {
                         title: "重构订单页的数据层", cwd: "/tmp",
                         host: "VS Code", bundleId: "com.microsoft.VSCode", tty: "",
                         state: .done, detail: "重构完成，12 个测试全部通过", updated: Date())
-        let view = NSHostingView(rootView: PillView(session: s))
+        // 真机上胶囊靠系统材质透出背景，导出图里垫一层不透明底色，免得在深色主题下看不清
+        let view = NSHostingView(rootView: PillView(session: s)
+            .padding(.horizontal, 16).padding(.vertical, 10)
+            .background(Color(NSColor.windowBackgroundColor)))
         let size = view.fittingSize
         view.frame = NSRect(origin: .zero, size: size)
         view.layoutSubtreeIfNeeded()
-        guard let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return }
-        view.cacheDisplay(in: view.bounds, to: rep)
-        guard let png = rep.representation(using: .png, properties: [:]) else { return }
-        try? png.write(to: URL(fileURLWithPath: path))
-        print("pill -> \(path)")
+        writePNG(view, to: path)
     }
 }
 
