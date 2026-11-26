@@ -1,5 +1,7 @@
 # AgentsDone
 
+**中文** · [English](README.en.md)
+
 极轻量的 macOS 菜单栏小工具：**同时开很多 AI 编码会话时，哪个跑完了、哪个在等你，一眼看见。**
 
 不用切窗口挨个看，也不用给每个工具单独配一遍。
@@ -110,6 +112,18 @@ DSH 的审批提醒要借 DSH 桌面版自带的引擎解压它的 zstd 日志�
 · `AGENTSDONE_ANTIGRAVITY_ROOT` · `AGENTSDONE_REMOTE=0`（关远端） · `AGENTSDONE_NO_LAUNCH=1`
 
 </details>
+
+## 出问题先看诊断
+
+点 🔔 → 设置 → 「数据目录」旁的 **诊断**，能看到每个 Agent 到底读不读得到数据：
+
+<img src="docs/diag.png" width="420" alt="诊断">
+
+右上角「复制诊断信息」可以一键贴出来；命令行也能跑：
+
+```bash
+~/Applications/AgentsDone.app/Contents/MacOS/AgentsDone --diagnose
+```
 
 ## 注意
 

@@ -1822,6 +1822,8 @@ struct SettingsView: View {
                 HStack(spacing: 6) {
                     Text("数据目录").font(.system(size: 12, weight: .semibold))
                     Spacer()
+                    Button("诊断") { DiagnosticsWindowController.shared.show() }
+                        .buttonStyle(.plain).font(.system(size: 10.5)).foregroundStyle(.blue)
                     Button("打开配置文件") {
                         NSWorkspace.shared.open(URL(fileURLWithPath: ConfigStore.path))
                     }
@@ -1862,6 +1864,212 @@ struct SettingsView: View {
             .padding(.horizontal, 16).padding(.vertical, 10)
         }
         .frame(width: 480, height: 640)
+    }
+}
+
+/// 诊断：每个 Agent 到底能不能读到、读到多少。用户说「没提醒」时先看这里。
+enum Diagnostics {
+    struct Row {
+        let title: String
+        let ok: Bool
+        let detail: String
+    }
+
+    private static func count(_ dir: String, suffix: String) -> Int {
+        guard let en = FileManager.default.enumerator(atPath: dir) else { return 0 }
+        var n = 0
+        for case let p as String in en where p.hasSuffix(suffix) {
+            n += 1
+            if n > 9999 { break }
+        }
+        return n
+    }
+
+    private static func fileSize(_ path: String) -> String? {
+        guard let a = try? FileManager.default.attributesOfItem(atPath: path),
+              let n = a[.size] as? Int64 else { return nil }
+        if n > 1_048_576 { return String(format: "%.1f MB", Double(n) / 1_048_576) }
+        if n > 1024 { return "\(n / 1024) KB" }
+        return "\(n) B"
+    }
+
+    static func rows() -> [Row] {
+        var out: [Row] = []
+        let fm = FileManager.default
+
+        // Claude Code：看 hooks 有没有真的写进去
+        let claudeDir = AgentPaths.base("claude")
+        let settingsPath = claudeDir + "/settings.json"
+        var claudeOK = false
+        var claudeNote = "没找到 settings.json"
+        if let text = try? String(contentsOfFile: settingsPath, encoding: .utf8) {
+            claudeOK = text.contains("agentsdone-hook")
+            claudeNote = claudeOK ? "hooks 已写入，新开会话后生效" : "settings.json 里没有 agentsdone-hook，重跑 install.sh"
+        }
+        out.append(Row(title: "Claude Code", ok: claudeOK, detail: claudeNote))
+
+        // Codex
+        let codexDir = AgentPaths.base("codex")
+        if fm.fileExists(atPath: codexDir) {
+            let n = count(AgentPaths.codexSessions(), suffix: ".jsonl")
+            out.append(Row(title: "Codex", ok: n > 0,
+                           detail: n > 0 ? "\(n) 个会话日志" : "目录在，但没有会话日志（还没跑过？）"))
+        } else {
+            out.append(Row(title: "Codex", ok: false, detail: "目录不存在，没装或改过 CODEX_HOME"))
+        }
+
+        // DeepSeek Harness
+        let dshDir = AgentPaths.base("dsh")
+        if fm.fileExists(atPath: dshDir) {
+            let n = count(AgentPaths.dshSessions(), suffix: ".json")
+            let node = DSHLogReader.nodePath != nil
+            out.append(Row(title: "DeepSeek Harness", ok: n > 0,
+                           detail: "\(n) 个会话缓存" + (node ? " · 解释器已找到" : " · 找不到 DSH 解释器，审批提醒不可用")))
+        } else {
+            out.append(Row(title: "DeepSeek Harness", ok: false, detail: "目录不存在"))
+        }
+
+        // ZCode
+        let zcodeDir = AgentPaths.base("zcode")
+        let zcodeDB = zcodeDir + "/tasks-index.sqlite"
+        if let size = fileSize(zcodeDB) {
+            out.append(Row(title: "ZCode", ok: true, detail: "任务索引 \(size)"))
+        } else {
+            out.append(Row(title: "ZCode", ok: false, detail: "没找到 tasks-index.sqlite"))
+        }
+
+        // Antigravity
+        let agDir = AgentPaths.base("antigravity")
+        let agDB = agDir + "/conversation_summaries.db"
+        if let size = fileSize(agDB) {
+            out.append(Row(title: "Antigravity", ok: true, detail: "会话库 \(size)"))
+        } else {
+            out.append(Row(title: "Antigravity", ok: false, detail: "没找到 conversation_summaries.db"))
+        }
+        return out
+    }
+
+    static let demoRows: [Row] = [
+        Row(title: "Claude Code", ok: true, detail: "hooks 已写入，新开会话后生效"),
+        Row(title: "Codex", ok: true, detail: "27 个会话日志"),
+        Row(title: "DeepSeek Harness", ok: true, detail: "69 个会话缓存 · 解释器已找到"),
+        Row(title: "ZCode", ok: true, detail: "任务索引 2.1 MB"),
+        Row(title: "Antigravity", ok: false, detail: "没找到 conversation_summaries.db"),
+    ]
+
+    /// 一键复制的纯文本，方便贴出来排查
+    static func text() -> String {
+        let ver = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "dev"
+        var lines = ["AgentsDone 诊断", "版本 \(ver)",
+                     "配置 \(ConfigStore.path)"]
+        for r in rows() {
+            lines.append("\(r.ok ? "✓" : "✗")  \(r.title)：\(r.detail)")
+        }
+        lines.append("—— 路径 ——")
+        for item in AgentPaths.labels {
+            lines.append("\(item.title)：\(AgentPaths.pretty(AgentPaths.base(item.key)))")
+        }
+        lines.append("DSH 解释器：\(DSHLogReader.nodePath.map { AgentPaths.pretty($0) } ?? "未找到")")
+        let cfgHosts = ConfigStore.load().hosts
+        lines.append("远端主机（配置）：" + (cfgHosts.isEmpty ? "无"
+            : cfgHosts.map { "\($0.host)\($0.enabled ? "" : "(停用)")" }.joined(separator: ", ")))
+        let live = RemoteWatcher.shared.status
+        if !live.isEmpty {
+            lines.append("远端状态：" + live.keys.sorted().map { "\($0)=\(live[$0] ?? "?")" }.joined(separator: ", "))
+        }
+        return lines.joined(separator: "\n")
+    }
+}
+
+struct DiagnosticsView: View {
+    var demo = false
+    @State private var rows: [Diagnostics.Row] = []
+    @State private var copied = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 8) {
+                Text("诊断").font(.system(size: 13, weight: .semibold))
+                Spacer()
+                Button(copied ? "已复制" : "复制诊断信息") {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(Diagnostics.text(), forType: .string)
+                    copied = true
+                }
+                .buttonStyle(.plain).font(.system(size: 11)).foregroundStyle(Color.accentColor)
+            }
+            .padding(.horizontal, 16).padding(.top, 14).padding(.bottom, 4)
+
+            Text("显示本机实际能不能读到每个 Agent 的数据。说「没提醒」时先看这里。")
+                .font(.system(size: 11)).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.horizontal, 16).padding(.bottom, 10)
+
+            Divider()
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 9) {
+                    ForEach(Array(rows.enumerated()), id: \.offset) { _, r in
+                        HStack(alignment: .top, spacing: 7) {
+                            Circle()
+                                .fill(r.ok ? Color.green : Color.orange)
+                                .frame(width: 7, height: 7)
+                                .padding(.top, 4)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(r.title).font(.system(size: 11.5, weight: .medium))
+                                Text(r.detail).font(.system(size: 10.5)).foregroundStyle(.secondary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                            Spacer(minLength: 0)
+                        }
+                    }
+                    Divider().padding(.vertical, 2)
+                    ForEach(AgentPaths.labels, id: \.key) { item in
+                        HStack(spacing: 6) {
+                            Text(item.title)
+                                .font(.system(size: 10.5)).foregroundStyle(.secondary)
+                                .frame(width: 120, alignment: .leading)
+                            Text(AgentPaths.pretty(AgentPaths.base(item.key)))
+                                .font(.system(size: 10.5, design: .monospaced))
+                                .lineLimit(1).truncationMode(.middle)
+                                .textSelection(.enabled)
+                            Spacer(minLength: 0)
+                        }
+                    }
+                }
+                .padding(.horizontal, 16).padding(.vertical, 12)
+            }
+
+            Divider()
+            HStack {
+                Button("重新检查") { rows = Diagnostics.rows() }
+                    .buttonStyle(.plain).font(.system(size: 11)).foregroundStyle(.blue)
+                Spacer()
+            }
+            .padding(.horizontal, 16).padding(.vertical, 10)
+        }
+        .frame(width: 420, height: 460)
+        .onAppear { if rows.isEmpty { rows = demo ? Diagnostics.demoRows : Diagnostics.rows() } }
+    }
+}
+
+final class DiagnosticsWindowController {
+    static let shared = DiagnosticsWindowController()
+    private var window: NSWindow?
+
+    func show() {
+        if window == nil {
+            let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 420, height: 460),
+                             styleMask: [.titled, .closable],
+                             backing: .buffered, defer: false)
+            w.title = "AgentsDone · 诊断"
+            w.contentViewController = NSHostingController(rootView: DiagnosticsView())
+            w.isReleasedWhenClosed = false
+            w.center()
+            window = w
+        }
+        NSApp.activate(ignoringOtherApps: true)
+        window?.makeKeyAndOrderFront(nil)
     }
 }
 
@@ -2462,6 +2670,13 @@ enum Snapshot {
     }
 
     @MainActor
+    static func renderDiag(path: String) {
+        SnapshotFlag.active = true
+        let content = DiagnosticsView(demo: true).background(Color(NSColor.windowBackgroundColor))
+        legacyPNG(content, size: CGSize(width: 420, height: 460), to: path)
+    }
+
+    @MainActor
     static func renderSettings(path: String) {
         let model = SettingsModel(demo: true)
         let content = SettingsView(model: model).background(Color(NSColor.windowBackgroundColor))
@@ -2510,6 +2725,14 @@ struct AgentsDoneMain {
             }
             DispatchQueue.main.asyncAfter(deadline: .now() + 9) { exit(0) }
             app.run()
+            exit(0)
+        }
+        if let i = args.firstIndex(of: "--snapshot-diag"), i + 1 < args.count {
+            Snapshot.renderDiag(path: args[i + 1])
+            exit(0)
+        }
+        if args.contains("--diagnose") {
+            print(Diagnostics.text())
             exit(0)
         }
         if args.contains("--paths") {
