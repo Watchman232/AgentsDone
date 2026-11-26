@@ -43,6 +43,17 @@
 | 授权 | 不需要辅助功能、不需要通知权限 |
 | 磁盘 / 内存 | 约 2.5 MB / 常驻约 37 MB |
 
+**方式一：下载即用**（不需要终端）
+
+从 [Releases](https://github.com/Watchman232/AgentsDone/releases/latest) 下载 `AgentsDone-<版本>.zip`，
+解压后把 `AgentsDone.app` 拖进「应用程序」。第一次打开请**右键 → 打开**；macOS 15 之后右键打开已被移除，
+去「系统设置 → 隐私与安全性」点「仍要打开」即可（App 未做 Apple 公证）。
+Codex / DeepSeek Harness / ZCode / Antigravity 这样就够用了。
+
+**方式二：脚本安装**（推荐，连 Claude Code 一起提醒）
+
+Claude Code 的完成/审批事件只能靠 hook 拿到，所以要让 Claude 也提醒就得走脚本：
+
 ```bash
 git clone https://github.com/Watchman232/AgentsDone.git
 cd AgentsDone

@@ -43,6 +43,18 @@ With nothing running:
 | Permissions | No accessibility access, no notification permission |
 | Disk / RAM | ~2.5 MB / ~37 MB resident |
 
+**Option 1: download** (no terminal needed)
+
+Grab `AgentsDone-<version>.zip` from [Releases](https://github.com/Watchman232/AgentsDone/releases/latest),
+unzip it and drag `AgentsDone.app` into Applications. The first launch needs **right-click → Open**;
+on macOS 15 and later that shortcut is gone, so use System Settings → Privacy & Security → "Open Anyway"
+(the app is not notarized by Apple).
+This is enough for Codex / DeepSeek Harness / ZCode / Antigravity.
+
+**Option 2: script install** (recommended — also covers Claude Code)
+
+Claude Code's completion and approval events are only reachable through hooks, so the script is needed for those:
+
 ```bash
 git clone https://github.com/Watchman232/AgentsDone.git
 cd AgentsDone
