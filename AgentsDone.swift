@@ -1323,6 +1323,7 @@ enum SSHConfig {
 
 extension Notification.Name {
     static let agentsDoneRemoteStatus = Notification.Name("agentsDone.remote.status")
+    static let agentsDoneTestPill = Notification.Name("agentsDone.test.pill")
 }
 
 // MARK: - 远程监听（每个主机一条持久 ssh 流，只读增量字节）
@@ -1693,6 +1694,27 @@ struct SettingsView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 8) {
+                Text("提醒").font(.system(size: 13, weight: .semibold))
+                Spacer()
+                Button(action: {
+                    NotificationCenter.default.post(name: .agentsDoneTestPill, object: nil)
+                }) {
+                    Text("试一下提醒").font(.system(size: 12))
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(Color.accentColor)
+                .help("弹出两条示例提醒，确认声音和浮窗是否正常")
+            }
+            .padding(.horizontal, 16).padding(.top, 14).padding(.bottom, 4)
+
+            Text("会依次弹出两条示例（完成 + 待批准），用来确认提醒是否正常；点一下浮窗会跳到对应会话。")
+                .font(.system(size: 11)).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.horizontal, 16).padding(.bottom, 10)
+
+            Divider()
+
             HStack(spacing: 6) {
                 Text("远程（SSH）").font(.system(size: 13, weight: .semibold))
                 Spacer()
@@ -1868,14 +1890,45 @@ final class SettingsWindowController {
 
 
 
+/// 非激活面板第一次点击会被"激活窗口"吃掉，导致要点两下才有反应
+final class FirstMouseHostingView<Content: View>: NSHostingView<Content> {
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+}
+
 final class PillController {
     private var panel: NSPanel?
     private var hideWork: DispatchWorkItem?
+    private var queue: [(Session, () -> Void)] = []
+    private var tapAction: (() -> Void)?
+
+    /// 排队显示：几个会话同时跑完时依次出现，不再互相覆盖
+    func enqueue(_ s: Session, onClick: @escaping () -> Void) {
+        queue.append((s, onClick))
+        if queue.count > 5 { queue.removeFirst(queue.count - 5) }   // 极端刷屏时只留最近的
+        if panel == nil { showNext() }
+    }
+
+    private func showNext() {
+        guard panel == nil, !queue.isEmpty else { return }
+        let (s, action) = queue.removeFirst()
+        show(s, onClick: action)
+    }
+
+    /// 点胶囊 → 跳回那个会话，并接着显示下一条
+    private func handleTap() {
+        let action = tapAction
+        tapAction = nil
+        hide()
+        action?()
+    }
 
     func show(_ s: Session, onClick: @escaping () -> Void) {
         hide()
-        let view = PillView(session: s)
-        let host = NSHostingView(rootView: view)
+        tapAction = onClick
+        let root = PillView(session: s)
+            .contentShape(Rectangle())
+            .onTapGesture { [weak self] in self?.handleTap() }
+        let host = FirstMouseHostingView(rootView: root)
         host.layoutSubtreeIfNeeded()
         let size = host.fittingSize
         let panel = NSPanel(contentRect: NSRect(origin: .zero, size: size),
@@ -1887,6 +1940,7 @@ final class PillController {
         panel.level = .statusBar
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
         panel.ignoresMouseEvents = false
+        panel.becomesKeyOnlyIfNeeded = true
         panel.contentView = host
         if let screen = NSScreen.main {
             let f = screen.visibleFrame
@@ -1894,16 +1948,19 @@ final class PillController {
         }
         panel.alphaValue = 0
         panel.orderFrontRegardless()
-        panel.makeKey()
         NSAnimationContext.runAnimationGroup { ctx in
             ctx.duration = 0.16
             panel.animator().alphaValue = 1
         }
         self.panel = panel
-        let work = DispatchWorkItem { [weak self] in self?.hide() }
+        // 后面还排着队就缩短停留，避免一次弹太久
+        let stay: Double = queue.isEmpty ? 4.0 : 2.2
+        let work = DispatchWorkItem { [weak self] in
+            self?.tapAction = nil
+            self?.hide()
+        }
         hideWork = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 5, execute: work)
-        _ = onClick
+        DispatchQueue.main.asyncAfter(deadline: .now() + stay, execute: work)
     }
 
     func hide() {
@@ -1913,7 +1970,10 @@ final class PillController {
         NSAnimationContext.runAnimationGroup({ ctx in
             ctx.duration = 0.2
             panel.animator().alphaValue = 0
-        }, completionHandler: { panel.orderOut(nil) })
+        }, completionHandler: { [weak self] in
+            panel.orderOut(nil)
+            self?.showNext()
+        })
     }
 }
 
@@ -2120,7 +2180,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var statusItem: NSStatusItem!
     var popover: NSPopover?
 
+    /// 设置页「试一下提醒」：用两条假会话演示排队和点击
+    func playTestPill() {
+        if !store.muted { NSSound(named: "Glass")?.play() }
+        let demo = [
+            Session(id: "demo-done", agent: "codex", project: "checkout-service",
+                    title: "重构订单页的数据层", cwd: "", host: "VS Code",
+                    bundleId: "com.microsoft.VSCode", tty: "", state: .done,
+                    detail: "12 个测试全部通过", updated: Date()),
+            Session(id: "demo-needs", agent: "claude", project: "api-server",
+                    title: "把限流挪到网关层", cwd: "", host: "iTerm",
+                    bundleId: "com.googlecode.iterm2", tty: "", state: .needs,
+                    detail: "等待批准：Bash · git push origin main", updated: Date()),
+        ]
+        for s in demo { pill.enqueue(s, onClick: {}) }
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
+        NotificationCenter.default.addObserver(forName: .agentsDoneTestPill, object: nil,
+                                               queue: .main) { [weak self] _ in
+            self?.playTestPill()
+        }
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         statusItem.button?.imagePosition = .imageLeading
         statusItem.button?.target = self
@@ -2236,7 +2316,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let isNew = !before.contains { $0.id == s.id && $0.state == s.state }
         if isNew, !store.muted {
             if ev.kind == "done" { NSSound(named: "Glass")?.play() }
-            pill.show(s, onClick: { [weak self] in self?.jump(to: s) })
+            pill.enqueue(s, onClick: { [weak self] in self?.jump(to: s) })
         }
     }
 
@@ -2417,6 +2497,19 @@ struct AgentsDoneMain {
         }
         if let i = args.firstIndex(of: "--snapshot-settings"), i + 1 < args.count {
             Snapshot.renderSettings(path: args[i + 1])
+            exit(0)
+        }
+        if args.contains("--test-pill") {
+            // 自测：起 App 后弹两条示例提醒，8 秒后退出，用来确认排队与点击行为
+            let app = NSApplication.shared
+            let delegate = AppDelegate()
+            app.delegate = delegate
+            app.setActivationPolicy(.accessory)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
+                delegate.playTestPill()
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 9) { exit(0) }
+            app.run()
             exit(0)
         }
         if args.contains("--paths") {

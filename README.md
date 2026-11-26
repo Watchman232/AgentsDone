@@ -22,7 +22,8 @@
 - **待批准 / 需要你** —— 它在等你点同意、等你回话，或任务出错
 - **运行中** —— 正在跑，安静地列在下面
 
-点任意一行 → 跳回那个 App（VS Code / iTerm / Terminal / Codex / Harness / ZCode / Antigravity）并把该行消掉。
+点任意一行 → 跳回那个 App（VS Code / iTerm / Terminal / Codex / Harness / ZCode / Antigravity）并把该行消掉；
+点弹出的浮窗也能跳回去。几个会话同时完成时，浮窗会排队依次出现，不会互相盖掉。
 
 <img src="docs/pill.png" width="320" alt="完成提示">
 
@@ -47,6 +48,8 @@ cd AgentsDone
 ```
 
 没有 git 就网页右上 **Code → Download ZIP**，解压后进目录跑 `./install.sh`（脚本会自己清掉 quarantine 标记）。
+
+装完先点 🔔 → 设置 → 右上角「试一下提醒」，会依次弹出两条示例，确认声音和浮窗正常。
 
 装完你会看到：菜单栏多一个 🔔、`~/Applications/AgentsDone.app`、`~/.agentsdone/`（采集端），
 以及登录自启（`~/Library/LaunchAgents/dev.agentsdone.app.plist`，意外退出会被自动拉起）。

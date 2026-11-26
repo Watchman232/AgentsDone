@@ -68,7 +68,7 @@ cat > "$BUILD/$APP_NAME.app/Contents/Info.plist" <<'PLIST'
     <key>CFBundleIdentifier</key><string>dev.agentsdone.app</string>
     <key>CFBundleExecutable</key><string>AgentsDone</string>
     <key>CFBundlePackageType</key><string>APPL</string>
-    <key>CFBundleShortVersionString</key><string>0.3.18</string>
+    <key>CFBundleShortVersionString</key><string>0.3.19</string>
     <key>CFBundleVersion</key><string>2</string>
     <key>LSMinimumSystemVersion</key><string>12.0</string>
     <key>LSUIElement</key><true/>
@@ -139,13 +139,12 @@ cat <<TIP
 
   菜单栏右上角现在应该有一个 🔔。
 
+  · 先确认能响：点 🔔 → 设置 → 右上角「试一下提醒」
   · 点 🔔：查看哪些会话完成了 / 在等你
-  · 点某一行：跳回那个 App，并从列表移除
+  · 点某一行、或者点弹出的浮窗：跳回那个 App
   · 远程集群：菜单栏 → 设置 → 勾选主机 → 安装 Claude hooks
-  · 先试试：$HOOK_DIR/agentsdone-hook demo
-  · 查看状态：$HOOK_DIR/agentsdone-hook --status
-  · 卸载：./uninstall.sh
 
-  Claude Code：新开一个会话才会读到新 hooks
-  Codex（CLI / VS Code 扩展 / 桌面 App）：无需任何配置
+  重要：Claude Code 需要新开一个会话才会读到新 hooks，
+        已经在跑的会话不会补上。Codex / DSH / ZCode / Antigravity 零配置。
+
 TIP
