@@ -117,6 +117,9 @@ cat > "$PLIST" <<PLIST
     <key>ProgramArguments</key>
     <array><string>$BUNDLE/Contents/MacOS/AgentDone</string></array>
     <key>RunAtLoad</key><true/>
+    <key>KeepAlive</key>
+    <dict><key>SuccessfulExit</key><false/></dict>
+    <key>ThrottleInterval</key><integer>10</integer>
     <key>ProcessType</key><string>Interactive</string>
     <key>LimitLoadToSessionType</key><string>Aqua</string>
 </dict>
@@ -132,15 +135,15 @@ if [ "${AGENTDONE_NO_LAUNCH:-0}" != "1" ]; then
 fi
 
 say "完成"
-cat <<'TIP'
+cat <<TIP
 
   菜单栏右上角现在应该有一个 🔔。
 
   · 点 🔔：查看哪些会话完成了 / 在等你
   · 点某一行：跳回那个 App，并从列表移除
   · 远程集群：菜单栏 → 设置 → 勾选主机 → 安装 Claude hooks
-  · 先试试：~/.agentdone/agentdone-hook demo
-  · 查看状态：~/.agentdone/agentdone-hook --status
+  · 先试试：$HOOK_DIR/agentdone-hook demo
+  · 查看状态：$HOOK_DIR/agentdone-hook --status
   · 卸载：./uninstall.sh
 
   Claude Code：新开一个会话才会读到新 hooks

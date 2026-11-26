@@ -203,6 +203,8 @@ cd AgentDone
 脚本会：编译 App → 装到 `~/Applications/AgentDone.app` → 装 hook 到 `~/.agentdone/` →
 把 6 个 hook 合并进 `~/.claude/settings.json`（先备份，保留你已有的其它 hook）→
 注册登录自启（`~/Library/LaunchAgents/dev.agentdone.app.plist`）。
+plist 里启用了 `KeepAlive`（只对非 0 退出），所以 App 意外挂掉会被 launchd 拉起来；
+从菜单选「退出」是正常退出，不会被拉起。
 
 想把整个工具发给别人：**把整个 `agentdone/` 文件夹（含 `vendor/`）拷过去**，对方跑 `./install.sh` 就行。
 从网上下载/微信传的文件会带 quarantine 标记，安装脚本已自动 `xattr -cr` 清掉。
