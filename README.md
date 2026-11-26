@@ -4,7 +4,7 @@
 
 不用切窗口挨个看，也不用给每个工具单独配一遍。
 
-![菜单栏列表](docs/panel.png)
+<img src="docs/panel.png" width="340" alt="菜单栏列表">
 
 ## 支持什么
 
@@ -24,11 +24,11 @@
 
 点任意一行 → 跳回那个 App（VS Code / iTerm / Terminal / Codex / Harness / ZCode / Antigravity）并把该行消掉。
 
-![完成胶囊](docs/pill.png)
+<img src="docs/pill.png" width="320" alt="完成提示">
 
 没有会话时：
 
-![今日宜休息](docs/empty.png)
+<img src="docs/empty.png" width="340" alt="空状态">
 
 ## 安装
 
@@ -76,7 +76,7 @@ VS Code Remote-SSH 或者直接连开发机跑 Codex/Claude 时，本机 App 也
 菜单栏 → 设置 → 勾选主机 → 「安装 Claude hooks」。
 只增量读远端的会话日志（每轮几百字节），不下载任何文件，脚本经 ssh stdin 送入、不落盘。
 
-![远程设置](docs/settings.png)
+<img src="docs/settings.png" width="480" alt="设置页">
 
 ## 配置（通常不用）
 

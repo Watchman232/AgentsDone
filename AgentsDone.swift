@@ -1963,6 +1963,15 @@ struct PanelView: View {
         return "无会话"
     }
 
+    private var sessionList: some View {
+        VStack(spacing: 4) {
+            ForEach(store.sessions) { s in
+                RowView(session: s).onTapGesture { onJump(s) }
+            }
+        }
+        .padding(8)
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 6) {
@@ -1984,15 +1993,11 @@ struct PanelView: View {
                 }
                 .frame(maxWidth: .infinity).padding(.vertical, 30)
             } else {
-                ScrollView {
-                    VStack(spacing: 4) {
-                        ForEach(store.sessions) { s in
-                            RowView(session: s).onTapGesture { onJump(s) }
-                        }
-                    }
-                    .padding(8)
+                if SnapshotFlag.active {
+                    sessionList
+                } else {
+                    ScrollView { sessionList }.frame(maxHeight: 424)
                 }
-                .frame(maxHeight: 424)
             }
 
             Divider()
@@ -2283,39 +2288,63 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
 // MARK: - 预览图渲染（--snapshot）
 
+/// 出预览图时置 true：ScrollView 在 ImageRenderer 里渲染不出内容，改用普通 VStack
+enum SnapshotFlag {
+    nonisolated(unsafe) static var active = false
+}
+
 enum Snapshot {
-    /// 离屏渲染成 PNG。默认 3 倍分辨率：GitHub 按 CSS 像素显示，
-    /// 2 倍在 Retina 上等于一个图像像素对两个物理像素，看着发虚。
-    static func writePNG(_ view: NSView, to path: String, scale: CGFloat = 3) {
-        view.layoutSubtreeIfNeeded()
-        let w = Int((view.bounds.width * scale).rounded())
-        let h = Int((view.bounds.height * scale).rounded())
-        guard w > 0, h > 0,
-              let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: w, pixelsHigh: h,
-                                         bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true,
-                                         isPlanar: false, colorSpaceName: .deviceRGB,
-                                         bytesPerRow: 0, bitsPerPixel: 0) else { return }
-        rep.size = view.bounds.size          // 关键：告诉 AppKit 按 scale 倍绘制
-        view.cacheDisplay(in: view.bounds, to: rep)
+    /// 用 SwiftUI 的 ImageRenderer 按 scale 倍重绘。
+    /// 离屏 NSHostingView 走 cacheDisplay 只在 1 倍下栅格化、再被放大填进大位图 —— 文字就是那样发虚的。
+    @MainActor
+    @available(macOS 13.0, *)
+    static func render<V: View>(_ content: V, size: CGSize, to path: String, scale: CGFloat = 3) {
+        let renderer = ImageRenderer(content: content.frame(width: size.width, height: size.height))
+        renderer.scale = scale
+        guard let cg = renderer.cgImage,
+              let png = NSBitmapImageRep(cgImage: cg).representation(using: .png, properties: [:]) else { return }
+        try? png.write(to: URL(fileURLWithPath: path))
+        print("snapshot -> \(path) (\(cg.width)x\(cg.height))")
+    }
+
+    /// 兜底：含 AppKit 控件（Toggle / TextField）的视图 ImageRenderer 画不出来，
+    /// 只能走离屏 cacheDisplay。它按视图自身 backing scale 栅格化（本机 2 倍）。
+    @MainActor
+    static func legacyPNG<V: View>(_ content: V, size: CGSize, to path: String) {
+        let host = NSHostingView(rootView: content)
+        host.frame = NSRect(origin: .zero, size: size)
+        host.layoutSubtreeIfNeeded()
+        guard let rep = host.bitmapImageRepForCachingDisplay(in: host.bounds) else { return }
+        host.cacheDisplay(in: host.bounds, to: rep)
         guard let png = rep.representation(using: .png, properties: [:]) else { return }
         try? png.write(to: URL(fileURLWithPath: path))
-        print("snapshot -> \(path) (\(w)x\(h))")
+        print("snapshot -> \(path) (\(rep.pixelsWide)x\(rep.pixelsHigh))")
     }
 
+    /// 量出 SwiftUI 视图在给定宽度下的自然高度
+    @MainActor
+    static func measure<V: View>(_ content: V, width: CGFloat, minHeight: CGFloat) -> CGSize {
+        let host = NSHostingView(rootView: content)
+        host.frame = NSRect(x: 0, y: 0, width: width > 0 ? width : 10, height: 200)
+        host.layoutSubtreeIfNeeded()
+        let fit = host.fittingSize
+        let w = width > 0 ? width : fit.width          // width 传 0 表示按内容自然宽度
+        return CGSize(width: ceil(w), height: ceil(max(fit.height, minHeight)))
+    }
+
+    @MainActor
     static func renderEmpty(path: String) {
+        SnapshotFlag.active = true
         let store = Store()
-        let view = NSHostingView(rootView: PanelView(store: store, onJump: { _ in }, onClear: {}, onMute: {}))
-        view.frame = NSRect(x: 0, y: 0, width: 340, height: 160)
-        view.layoutSubtreeIfNeeded()
-        let size = view.fittingSize
-        view.frame = NSRect(origin: .zero, size: CGSize(width: 340, height: max(size.height, 150)))
-        view.layoutSubtreeIfNeeded()
-        writePNG(view, to: path)
+        let content = PanelView(store: store, onJump: { _ in }, onClear: {}, onMute: {})
+        let size = measure(content, width: 340, minHeight: 150)
+        if #available(macOS 13.0, *) { render(content, size: size, to: path) }
     }
 
+    @MainActor
     static func render(path: String) {
+        SnapshotFlag.active = true
         let store = Store()
-        let now = Date()
         let samples: [HookEvent] = [
             HookEvent(agent: "claude", kind: "needs", sessionId: "a", cwd: "/Users/me/work/api-server",
                       project: "api-server", title: "复盘上周的权限模型改造",
@@ -2347,40 +2376,32 @@ enum Snapshot {
                       detail: "", host: "VS Code（远程）", bundleId: "com.microsoft.VSCode"),
         ]
         for e in samples { store.ingest(e) }
-        _ = now
-        let view = NSHostingView(rootView: PanelView(store: store, onJump: { _ in }, onClear: {}, onMute: {}))
-        view.frame = NSRect(x: 0, y: 0, width: 340, height: 460)
-        view.layoutSubtreeIfNeeded()
-        let size = view.fittingSize
-        view.frame = NSRect(origin: .zero, size: CGSize(width: 340, height: max(size.height, 220)))
-        view.layoutSubtreeIfNeeded()
-        writePNG(view, to: path)
+        let content = PanelView(store: store, onJump: { _ in }, onClear: {}, onMute: {})
+        let size = measure(content, width: 340, minHeight: 220)
+        if #available(macOS 13.0, *) { render(content, size: size, to: path) }
     }
-}
 
-extension Snapshot {
+    @MainActor
     static func renderSettings(path: String) {
         let model = SettingsModel(demo: true)
-        let view = SettingsView(model: model).background(Color(NSColor.windowBackgroundColor))
-        let host = NSHostingView(rootView: view)
-        host.frame = NSRect(x: 0, y: 0, width: 480, height: 640)
-        host.layoutSubtreeIfNeeded()
-        writePNG(host, to: path)
+        let content = SettingsView(model: model).background(Color(NSColor.windowBackgroundColor))
+        legacyPNG(content, size: CGSize(width: 480, height: 640), to: path)
     }
 
+    @MainActor
     static func renderPill(path: String) {
         let s = Session(id: "x", agent: "codex", project: "web-client",
                         title: "重构订单页的数据层", cwd: "/tmp",
                         host: "VS Code", bundleId: "com.microsoft.VSCode", tty: "",
                         state: .done, detail: "重构完成，12 个测试全部通过", updated: Date())
         // 真机上胶囊靠系统材质透出背景，导出图里垫一层不透明底色，免得在深色主题下看不清
-        let view = NSHostingView(rootView: PillView(session: s)
+        let content = PillView(session: s)
             .padding(.horizontal, 16).padding(.vertical, 10)
-            .background(Color(NSColor.windowBackgroundColor)))
-        let size = view.fittingSize
-        view.frame = NSRect(origin: .zero, size: size)
-        view.layoutSubtreeIfNeeded()
-        writePNG(view, to: path)
+            .background(Color(NSColor.windowBackgroundColor))
+        let size = measure(content, width: 0, minHeight: 1)   // 胶囊按自然宽度
+        if #available(macOS 13.0, *) {
+            render(content, size: CGSize(width: size.width, height: size.height), to: path)
+        }
     }
 }
 
@@ -2388,6 +2409,7 @@ extension Snapshot {
 
 @main
 struct AgentsDoneMain {
+    @MainActor
     static func main() {
         let args = CommandLine.arguments
         if let i = args.firstIndex(of: "--snapshot"), i + 1 < args.count {
