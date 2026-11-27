@@ -2,29 +2,29 @@
 
 ## 0.3.20
 
-- 提示音可选（Glass / Ping / Tink / Submarine / 无）
-- 新增「静音 30 分钟」
-- 新增全局快捷键 Option+Command+A 打开列表（不需要辅助功能权限）
-- 锁屏时不再弹窗、不再响，会话仍然进列表
-- 新增 CHANGELOG 和 issue 模板
+- Configurable completion sound (Glass / Ping / Tink / Submarine / none)
+- "Snooze 30 minutes" for meetings
+- Option+Command+A opens the panel from anywhere (Carbon hotkey, no accessibility permission)
+- Nothing pops up or rings while the screen is locked; sessions still land in the list
+- Added CHANGELOG and an issue template
 
 ## 0.3.19
 
-- 浮窗排队：几个会话同时完成时依次出现，不再互相覆盖
-- 浮窗可点击：点一下跳回那个会话（面板改为接受首次点击，一下就行）
-- 设置页新增「试一下提醒」，会依次弹两条示例，用来确认声音和浮窗
-- 设置页新增「诊断」：逐个 Agent 显示数据到底读不读得到，可一键复制
-- 新增 `--diagnose` 命令行输出，报问题时直接粘贴
-- 安装脚本收尾提示改为「先自检」，并提示 Claude Code 需要新开会话
-- 英文 README，英文作为主 README（中文移到 `README.zh-CN.md`）
+- Completion pills queue instead of overwriting each other when several sessions finish together
+- Pills are clickable and jump back to that session (the panel now accepts the first mouse click)
+- Settings gained "try a reminder", which pops two samples so you can check the sound and the pill
+- Settings gained Diagnostics: per agent, whether its data is readable, copyable in one click
+- `--diagnose` prints the same summary from the command line
+- Install output now leads with the self-check and warns that Claude Code needs a new session
+- English README
 
 ## 0.3.18
 
-- 支持 Antigravity 会话
-- 空状态文案「今日宜休息」
-- 数据目录可配置，去掉硬编码路径
+- Antigravity support
+- "Time to rest" empty state
+- Configurable data directories; hardcoded paths removed
 
 ## 0.3.17
 
-- 列表显示会话标题（Codex 从 state 库读，DSH 从缓存读）
-- 远程 SSH 支持：只增量读远端日志，脚本经 stdin 不落盘
+- Session titles in the list (Codex from its state database, DSH from its cache)
+- Remote SSH support: tails remote logs incrementally, the script arrives over stdin and never touches disk
