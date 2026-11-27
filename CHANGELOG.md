@@ -16,7 +16,7 @@
 - 设置页新增「诊断」：逐个 Agent 显示数据到底读不读得到，可一键复制
 - 新增 `--diagnose` 命令行输出，报问题时直接粘贴
 - 安装脚本收尾提示改为「先自检」，并提示 Claude Code 需要新开会话
-- 英文 README（`README.en.md`）
+- 英文 README，英文作为主 README（中文移到 `README.zh-CN.md`）
 
 ## 0.3.18
 
