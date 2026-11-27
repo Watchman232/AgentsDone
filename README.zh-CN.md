@@ -6,7 +6,7 @@
 
 不用切窗口挨个看，也不用给每个工具单独配一遍。
 
-<img src="docs/panel.png" width="340" alt="菜单栏列表">
+<img src="docs/zh/panel.png" width="340" alt="菜单栏列表">
 
 ## 支持什么
 
@@ -27,11 +27,11 @@
 点任意一行 → 跳回那个 App（VS Code / iTerm / Terminal / Codex / Harness / ZCode / Antigravity）并把该行消掉；
 点弹出的浮窗也能跳回去。几个会话同时完成时，浮窗会排队依次出现，不会互相盖掉。
 
-<img src="docs/pill.png" width="320" alt="完成提示">
+<img src="docs/zh/pill.png" width="320" alt="完成提示">
 
 没有会话时：
 
-<img src="docs/empty.png" width="340" alt="空状态">
+<img src="docs/zh/empty.png" width="340" alt="空状态">
 
 ## 安装
 
@@ -93,7 +93,7 @@ VS Code Remote-SSH 或者直接连开发机跑 Codex/Claude 时，本机 App 也
 菜单栏 → 设置 → 勾选主机 → 「安装 Claude hooks」。
 只增量读远端的会话日志（每轮几百字节），不下载任何文件，脚本经 ssh stdin 送入、不落盘。
 
-<img src="docs/settings.png" width="480" alt="设置页">
+<img src="docs/zh/settings.png" width="480" alt="设置页">
 
 ## 配置（通常不用）
 
@@ -130,7 +130,7 @@ DSH 的审批提醒要借 DSH 桌面版自带的引擎解压它的 zstd 日志�
 
 点 🔔 → 设置 → 「数据目录」旁的 **诊断**，能看到每个 Agent 到底读不读得到数据：
 
-<img src="docs/diag.png" width="420" alt="诊断">
+<img src="docs/zh/diag.png" width="420" alt="诊断">
 
 右上角「复制诊断信息」可以一键贴出来；命令行也能跑：
 

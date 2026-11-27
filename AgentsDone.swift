@@ -100,7 +100,7 @@ final class Store: ObservableObject {
         let project = ev.project ?? (cwd.isEmpty ? agentLabel(ev.agent) : (cwd as NSString).lastPathComponent)
         let title = (ev.title?.isEmpty == false) ? ev.title : nil
         let key = "\(ev.agent):\(ev.sessionId ?? cwd)"
-        let host = ev.host ?? "终端"
+        let host = ev.host ?? L.t("终端", "Terminal")
 
         if ev.kind == "gone" {
             // 会话结束时有结论（完成/需要你）就保留 —— 尤其是 -p 这类一次跑完立刻退出的场景，
@@ -342,26 +342,31 @@ enum CodexNeeds {
         switch kind {
         case "exec_approval_request":
             let cmd = clean(str(payload["command"]))
-            return cmd.isEmpty ? "等待批准：执行命令" : "等待批准：\(cmd)"
+            let p = L.t("等待批准", "Waiting for approval")
+        return cmd.isEmpty ? p + L.t("：执行命令", ": run a command") : p + L.t("：", ": ") + cmd
         case "apply_patch_approval_request":
             let target = clean(str(payload["grant_root"]).isEmpty ? str(payload["path"]) : str(payload["grant_root"]))
             let reason = clean(str(payload["reason"]))
-            if !target.isEmpty { return "等待批准：修改 \(target)" }
-            return reason.isEmpty ? "等待批准：修改文件" : "等待批准：\(reason)"
+            if !target.isEmpty { return L.t("等待批准", "Waiting for approval") + L.t("：修改 ", ": edit ") + target }
+            let p = L.t("等待批准", "Waiting for approval")
+        return reason.isEmpty ? p + L.t("：修改文件", ": edit a file") : p + L.t("：", ": ") + reason
         case "request_user_input":
             // questions[0].question
             if let qs = payload["questions"] as? [[String: Any]], let q = qs.first,
                case let text = clean(str(q["question"])), !text.isEmpty {
-                return "等待回答：\(text)"
+                return L.t("等待回答", "Waiting for your reply") + L.t("：", ": ") + text
             }
             let q = clean(str(payload["question"]))
-            return q.isEmpty ? "等待回答" : "等待回答：\(q)"
+            let p = L.t("等待回答", "Waiting for your reply")
+        return q.isEmpty ? p : p + L.t("：", ": ") + q
         case "request_permissions":
             let r = clean(str(payload["reason"]))
-            return r.isEmpty ? "等待授权" : "等待授权：\(r)"
+            let p = L.t("等待授权", "Waiting for permission")
+        return r.isEmpty ? p : p + L.t("：", ": ") + r
         default:
             let r = clean(str(payload["reason"]))
-            return r.isEmpty ? "等待你的确认" : "等待你的确认：\(r)"
+            let p = L.t("等待你的确认", "Waiting for your confirmation")
+        return r.isEmpty ? p : p + L.t("：", ": ") + r
         }
     }
 }
@@ -426,7 +431,7 @@ final class CodexWatcher {
         loadMeta(path)
         // 历史事件不补发，但"正在跑"的会话要立刻出现在列表里（working 不响铃）
         guard tailState(path) == "working" else { return }
-        let info = meta[path] ?? ("", "终端", "", "")
+        let info = meta[path] ?? ("", L.t("终端", "Terminal"), "", "")
         let sid = URL(fileURLWithPath: path).lastPathComponent
             .replacingOccurrences(of: "rollout-", with: "")
             .replacingOccurrences(of: ".jsonl", with: "")
@@ -470,10 +475,10 @@ final class CodexWatcher {
         // source 是另一个维度（同一份日志里 source 恒为 vscode 也可能来自桌面 App），所以 originator 优先
         let originator = (payload["originator"] as? String)?.lowercased() ?? ""
         let source = (payload["source"] as? String)?.lowercased() ?? ""
-        var host = "终端", bundle = ""
+        var host = L.t("终端", "Terminal"), bundle = ""
         switch (originator, source) {
         case let (o, _) where o.contains("vscode"): host = "VS Code"; bundle = "com.microsoft.VSCode"
-        case let (o, _) where o.contains("desktop"): host = "Codex 桌面"; bundle = "com.openai.codex"
+        case let (o, _) where o.contains("desktop"): host = L.t("Codex 桌面", "Codex app"); bundle = "com.openai.codex"
         case let (o, _) where o.contains("cli"): host = "终端"; bundle = ""
         case let (o, s) where o.isEmpty && s.contains("vscode"): host = "VS Code"; bundle = "com.microsoft.VSCode"
         default: break
@@ -514,7 +519,7 @@ final class CodexWatcher {
             let usable = data.prefix(through: lastNL)
             offsets[path] = Int(start) + usable.count
             loadMeta(path)
-            let info = meta[path] ?? ("", "终端", "", "")
+            let info = meta[path] ?? ("", L.t("终端", "Terminal"), "", "")
             for line in usable.split(separator: 0x0A) {
                 guard let obj = (try? JSONSerialization.jsonObject(with: Data(line))) as? [String: Any],
                       obj["type"] as? String == "event_msg",
@@ -655,11 +660,12 @@ final class DSHWatcher {
                   let data = obj["data"] as? [String: Any] else { continue }
             switch type {
             case "approval/asked":
-                let tool = (data["toolName"] as? String) ?? "工具"
+                let tool = (data["toolName"] as? String) ?? L.t("工具", "a tool")
                 let reason = ((data["reason"] as? String) ?? "")
                     .replacingOccurrences(of: "\n", with: " ")
                     .trimmingCharacters(in: .whitespaces)
-                let detail = reason.isEmpty ? "等待批准：\(tool)" : "等待批准：\(tool) · \(reason)"
+                let p = L.t("等待批准", "Waiting for approval")
+        let detail = reason.isEmpty ? p + L.t("：", ": ") + tool : p + L.t("：", ": ") + tool + " · " + reason
                 emit(HookEvent(agent: "dsh", kind: "needs", sessionId: sid, cwd: cwd,
                                project: project, title: title,
                                detail: String(detail.prefix(80)), host: "DeepSeek Harness", bundleId: ""))
@@ -881,7 +887,7 @@ final class ZCodeWatcher {
             last[taskId] = state
             guard emit || (previous == nil && state == "working"), previous != state else { continue }
             let project = workspace.isEmpty ? "ZCode" : (workspace as NSString).lastPathComponent
-            let detail = (status == "error" || status == "failed") ? "任务出错" : ""
+            let detail = (status == "error" || status == "failed") ? L.t("任务出错", "Task errored") : ""
             let ev = HookEvent(agent: "zcode", kind: state, sessionId: taskId, cwd: workspace,
                                project: project, title: title,
                                detail: String(detail.prefix(80)),
@@ -1085,16 +1091,16 @@ final class AntigravityWatcher {
             switch stepStatus {
             case 9:                       // WAITING：等你批准或回答
                 state = "needs"
-                detail = "等待你在 Antigravity 里确认"
+                detail = L.t("等待你在 Antigravity 里确认", "Waiting for you in Antigravity")
             case 1, 2, 8, 11:             // PENDING / RUNNING / GENERATING / QUEUED
                 state = "working"
             case 7:                       // ERROR
                 state = "needs"
                 let e = err.replacingOccurrences(of: "\n", with: " ").trimmingCharacters(in: .whitespaces)
-                detail = e.isEmpty ? "任务出错" : String(e.prefix(80))
+                detail = e.isEmpty ? L.t("任务出错", "Task errored") : String(e.prefix(80))
             case 6, 12:                   // CANCELED / INTERRUPTED
                 state = "done"
-                detail = "已中断"
+                detail = L.t("已中断", "Interrupted")
             default:                      // DONE / 未知
                 state = running ? "working" : "done"
                 if state == "done" { detail = detailTail(id) }
@@ -1518,14 +1524,14 @@ final class RemoteWatcher {
         let session = (obj["session"] as? String) ?? cwd
         guard !session.isEmpty else { return }
 
-        var host = "终端（远程）", bundle = ""
+        var host = L.t("终端（远程）", "Terminal (remote)"), bundle = ""
         if agent == "codex" {
             let o = ((obj["originator"] as? String) ?? "").lowercased()
-            if o.contains("vscode") { host = "VS Code（远程）"; bundle = "com.microsoft.VSCode" }
-            else if o.contains("desktop") { host = "Codex 桌面"; bundle = "com.openai.codex" }
+            if o.contains("vscode") { host = L.t("VS Code（远程）", "VS Code (remote)"); bundle = "com.microsoft.VSCode" }
+            else if o.contains("desktop") { host = L.t("Codex 桌面", "Codex app"); bundle = "com.openai.codex" }
         } else {
             let tp = ((obj["tp"] as? String) ?? "").lowercased()
-            if tp.contains("vscode") { host = "VS Code（远程）"; bundle = "com.microsoft.VSCode" }
+            if tp.contains("vscode") { host = L.t("VS Code（远程）", "VS Code (remote)"); bundle = "com.microsoft.VSCode" }
         }
 
         let ev = HookEvent(agent: agent, kind: kind, sessionId: session, cwd: cwd,
@@ -1547,7 +1553,7 @@ final class RemoteWatcher {
         p.standardOutput = out
         p.standardError = out
         p.standardInput = inp
-        do { try p.run() } catch { return (-1, "无法启动 ssh") }
+        do { try p.run() } catch { return (-1, L.t("无法启动 ssh", "could not start ssh")) }
         if let stdin { inp.fileHandleForWriting.write(stdin.data(using: .utf8) ?? Data()) }
         try? inp.fileHandleForWriting.close()
         let data = out.fileHandleForReading.readDataToEndOfFile()
@@ -1566,10 +1572,10 @@ final class RemoteWatcher {
             .appendingPathComponent("../remote/install_hooks.py").standardizedFileURL.path
         guard let src = (try? String(contentsOfFile: local, encoding: .utf8))
                 ?? (try? String(contentsOfFile: fallback, encoding: .utf8)) else {
-            return "找不到 install_hooks.py"
+            return L.t("找不到 install_hooks.py", "install_hooks.py not found")
         }
         let (rc, out) = ssh(host, ["python3 - --install"], stdin: src)
-        return rc == 0 ? out : "失败：\(out)"
+        return rc == 0 ? out : L.t("失败：", "failed: ") + out
     }
 
     static func removeHooks(_ host: String) -> String {
@@ -1578,10 +1584,10 @@ final class RemoteWatcher {
             .appendingPathComponent("../remote/install_hooks.py").standardizedFileURL.path
         guard let src = (try? String(contentsOfFile: local, encoding: .utf8))
                 ?? (try? String(contentsOfFile: fallback, encoding: .utf8)) else {
-            return "找不到 install_hooks.py"
+            return L.t("找不到 install_hooks.py", "install_hooks.py not found")
         }
         let (rc, out) = ssh(host, ["python3 - --remove"], stdin: src)
-        return rc == 0 ? out : "失败：\(out)"
+        return rc == 0 ? out : L.t("失败：", "failed: ") + out
     }
 }
 
@@ -1690,24 +1696,24 @@ final class SettingsModel: ObservableObject {
 
     func testAll() {
         let hosts = selected
-        guard !hosts.isEmpty else { message = "还没有选中任何主机"; return }
-        run("测试中…") {
-            hosts.map { h in RemoteWatcher.test(h) ? "\(h): 可连接" : "\(h): 连不上" }.joined(separator: "\n")
+        guard !hosts.isEmpty else { message = L.t("还没有选中任何主机", "No hosts selected yet"); return }
+        run(L.t("测试中…", "Testing…")) {
+            hosts.map { h in RemoteWatcher.test(h) ? h + L.t(": 可连接", ": reachable") : h + L.t(": 连不上", ": unreachable") }.joined(separator: "\n")
         }
     }
 
     func installAll() {
         let hosts = selected
-        guard !hosts.isEmpty else { message = "还没有选中任何主机"; return }
-        run("安装中…") {
+        guard !hosts.isEmpty else { message = L.t("还没有选中任何主机", "No hosts selected yet"); return }
+        run(L.t("安装中…", "Installing…")) {
             hosts.map { h in "\(h)\n" + RemoteWatcher.installHooks(h) }.joined(separator: "\n")
         }
     }
 
     func removeAll() {
         let hosts = selected
-        guard !hosts.isEmpty else { message = "还没有选中任何主机"; return }
-        run("移除中…") {
+        guard !hosts.isEmpty else { message = L.t("还没有选中任何主机", "No hosts selected yet"); return }
+        run(L.t("移除中…", "Removing…")) {
             hosts.map { h in "\(h)\n" + RemoteWatcher.removeHooks(h) }.joined(separator: "\n")
         }
     }
@@ -1728,32 +1734,33 @@ struct SettingsView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 8) {
-                Text("提醒").font(.system(size: 13, weight: .semibold))
+                Text(L.t("提醒", "Reminders")).font(.system(size: 13, weight: .semibold))
                 Spacer()
                 Button(action: {
                     NotificationCenter.default.post(name: .agentsDoneTestPill, object: nil)
                 }) {
-                    Text("试一下提醒").font(.system(size: 12))
+                    Text(L.t("试一下提醒", "Try a reminder")).font(.system(size: 12))
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(Color.accentColor)
-                .help("弹出两条示例提醒，确认声音和浮窗是否正常")
+                .help(L.t("弹出两条示例提醒，确认声音和浮窗是否正常", "Pops two sample reminders so you can check the sound and the pill"))
             }
             .padding(.horizontal, 16).padding(.top, 14).padding(.bottom, 4)
 
-            Text("会依次弹出两条示例（完成 + 待批准），用来确认提醒是否正常；点一下浮窗会跳到对应会话。")
+            Text(L.t("会依次弹出两条示例（完成 + 待批准），用来确认提醒是否正常；点一下浮窗会跳到对应会话。",
+                           "Pops two samples (finished + needs approval) so you can check that reminders work. Clicking a pill jumps to that session."))
                 .font(.system(size: 11)).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
                 .padding(.horizontal, 16).padding(.bottom, 8)
 
             HStack(spacing: 8) {
-                Text("提示音").font(.system(size: 12))
+                Text(L.t("提示音", "Sound")).font(.system(size: 12))
                 Picker("", selection: $model.sound) {
                     Text("Glass").tag("Glass")
                     Text("Ping").tag("Ping")
                     Text("Tink").tag("Tink")
                     Text("Submarine").tag("Submarine")
-                    Text("无（静音）").tag("")
+                    Text(L.t("无（静音）", "None (silent)")).tag("")
                 }
                 .labelsHidden().frame(width: 116)
                 .onChange(of: model.sound) { v in
@@ -1762,14 +1769,14 @@ struct SettingsView: View {
                 }
                 Spacer()
                 if model.snoozing {
-                    Button("取消静音") {
+                    Button(L.t("取消静音", "Un-snooze")) {
                         NotificationCenter.default.post(name: .agentsDoneSnooze, object: nil,
                                                         userInfo: ["minutes": 0])
                         model.snoozing = false
                     }
                     .buttonStyle(.plain).font(.system(size: 11)).foregroundStyle(Color.accentColor)
                 } else {
-                    Button("静音 30 分钟") {
+                    Button(L.t("静音 30 分钟", "Snooze 30 min")) {
                         NotificationCenter.default.post(name: .agentsDoneSnooze, object: nil,
                                                         userInfo: ["minutes": 30])
                         model.snoozing = true
@@ -1780,7 +1787,7 @@ struct SettingsView: View {
             .padding(.horizontal, 16).padding(.bottom, 6)
 
             Toggle(isOn: $model.hotkey) {
-                Text("全局快捷键 Option+Command+A 打开列表").font(.system(size: 12))
+                Text(L.t("全局快捷键 Option+Command+A 打开列表", "Option+Command+A opens the list")).font(.system(size: 12))
             }
             .toggleStyle(.switch).controlSize(.mini)
             .onChange(of: model.hotkey) { _ in model.persist() }
@@ -1789,12 +1796,13 @@ struct SettingsView: View {
             Divider()
 
             HStack(spacing: 6) {
-                Text("远程（SSH）").font(.system(size: 13, weight: .semibold))
+                Text(L.t("远程（SSH）", "Remote (SSH)")).font(.system(size: 13, weight: .semibold))
                 Spacer()
             }
             .padding(.horizontal, 16).padding(.top, 14).padding(.bottom, 6)
 
-            Text("只增量读取远端的会话日志（每轮几百字节），不会下载任何文件；安装 hooks 时脚本经 stdin 送入，远端不落地脚本。")
+            Text(L.t("只增量读取远端的会话日志（每轮几百字节），不会下载任何文件；安装 hooks 时脚本经 stdin 送入，远端不落地脚本。",
+                           "Tails only new bytes of the remote session logs (a few hundred per turn) and downloads nothing. When installing hooks the script arrives over stdin and never touches the remote disk."))
                 .font(.system(size: 10.5))
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -1802,18 +1810,19 @@ struct SettingsView: View {
 
             Toggle(isOn: Binding(get: { model.followVSCode },
                                  set: { model.followVSCode = $0; model.persist() })) {
-                Text("自动跟随 VS Code 当前远程连接").font(.system(size: 12))
+                Text(L.t("自动跟随 VS Code 当前远程连接", "Follow the current VS Code remote")).font(.system(size: 12))
             }
             .toggleStyle(.switch)
             .padding(.horizontal, 16).padding(.top, 10)
 
             HStack(spacing: 8) {
-                Text("主机（来自 \(VSCodeConfig.sshConfigFile.replacingOccurrences(of: NSHomeDirectory(), with: "~"))）")
+                Text(L.t("主机（来自 \(VSCodeConfig.sshConfigFile.replacingOccurrences(of: NSHomeDirectory(), with: "~"))）",
+                                            "Hosts (from \(VSCodeConfig.sshConfigFile.replacingOccurrences(of: NSHomeDirectory(), with: "~")))"))
                     .font(.system(size: 11)).foregroundStyle(.secondary)
                 Spacer()
-                Button("刷新") { model.reload() }.buttonStyle(.plain)
+                Button(L.t("刷新", "Refresh")) { model.reload() }.buttonStyle(.plain)
                     .font(.system(size: 11)).foregroundStyle(.blue)
-                Button("编辑配置") {
+                Button(L.t("编辑配置", "Edit config")) {
                     NSWorkspace.shared.open(URL(fileURLWithPath: VSCodeConfig.sshConfigFile))
                 }.buttonStyle(.plain).font(.system(size: 11)).foregroundStyle(.blue)
             }
@@ -1822,7 +1831,7 @@ struct SettingsView: View {
             ScrollView {
                 VStack(spacing: 0) {
                     if model.available.isEmpty {
-                        Text("没读到主机。检查上面的配置文件，或用下面的手动添加。")
+                        Text(L.t("没读到主机。检查上面的配置文件，或用下面的手动添加。", "No hosts found. Check the config file above, or add one below."))
                             .font(.system(size: 11)).foregroundStyle(.secondary)
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .padding(.horizontal, 16).padding(.vertical, 8)
@@ -1836,7 +1845,7 @@ struct SettingsView: View {
                             }
                             .toggleStyle(.checkbox)
                             if host == model.currentRemote {
-                                Text("当前 VS Code")
+                                Text(L.t("当前 VS Code", "current VS Code"))
                                     .font(.system(size: 9)).foregroundStyle(.secondary)
                                     .padding(.horizontal, 4).padding(.vertical, 1)
                                     .background(Color.secondary.opacity(0.12))
@@ -1853,11 +1862,11 @@ struct SettingsView: View {
             .frame(maxHeight: 150)
 
             HStack(spacing: 6) {
-                TextField("手动添加主机（ssh 别名）", text: $model.customHost)
+                TextField(L.t("手动添加主机（ssh 别名）", "Add a host (ssh alias)"), text: $model.customHost)
                     .textFieldStyle(.roundedBorder)
                     .font(.system(size: 11))
                     .onSubmit { model.addCustom() }
-                Button("添加") { model.addCustom() }
+                Button(L.t("添加", "Add")) { model.addCustom() }
                     .buttonStyle(.plain).font(.system(size: 11)).foregroundStyle(.blue)
             }
             .padding(.horizontal, 16).padding(.vertical, 8)
@@ -1865,11 +1874,11 @@ struct SettingsView: View {
             Divider()
 
             HStack(spacing: 8) {
-                Button("测试连接") { model.testAll() }.buttonStyle(.plain)
+                Button(L.t("测试连接", "Test")) { model.testAll() }.buttonStyle(.plain)
                     .font(.system(size: 11.5)).foregroundStyle(.blue)
-                Button("安装 Claude hooks") { model.installAll() }.buttonStyle(.plain)
+                Button(L.t("安装 Claude hooks", "Install Claude hooks")) { model.installAll() }.buttonStyle(.plain)
                     .font(.system(size: 11.5)).foregroundStyle(.blue)
-                Button("移除") { model.removeAll() }.buttonStyle(.plain)
+                Button(L.t("移除", "Remove")) { model.removeAll() }.buttonStyle(.plain)
                     .font(.system(size: 11.5)).foregroundStyle(.secondary)
                 Spacer()
                 if !model.busy.isEmpty {
@@ -1893,11 +1902,11 @@ struct SettingsView: View {
 
             VStack(alignment: .leading, spacing: 5) {
                 HStack(spacing: 6) {
-                    Text("数据目录").font(.system(size: 12, weight: .semibold))
+                    Text(L.t("数据目录", "Data directories")).font(.system(size: 12, weight: .semibold))
                     Spacer()
-                    Button("诊断") { DiagnosticsWindowController.shared.show() }
+                    Button(L.t("诊断", "Diagnostics")) { DiagnosticsWindowController.shared.show() }
                         .buttonStyle(.plain).font(.system(size: 10.5)).foregroundStyle(.blue)
-                    Button("打开配置文件") {
+                    Button(L.t("打开配置文件", "Open config")) {
                         NSWorkspace.shared.open(URL(fileURLWithPath: ConfigStore.path))
                     }
                     .buttonStyle(.plain).font(.system(size: 10.5)).foregroundStyle(.blue)
@@ -1916,7 +1925,7 @@ struct SettingsView: View {
                     }
                 }
                 HStack(spacing: 6) {
-                    Text("DSH 解释器")
+                    Text(L.t("DSH 解释器", "DSH runtime"))
                         .font(.system(size: 10.5)).foregroundStyle(.secondary)
                         .frame(width: 116, alignment: .leading)
                     if let node = DSHLogReader.nodePath {
@@ -1926,12 +1935,13 @@ struct SettingsView: View {
                             .lineLimit(1).truncationMode(.middle)
                             .textSelection(.enabled)
                     } else {
-                        Text("未找到 · 只影响 DSH 审批提醒")
+                        Text(L.t("未找到 · 只影响 DSH 审批提醒", "Not found · only affects DSH approval reminders"))
                             .font(.system(size: 10.5)).foregroundStyle(.tertiary)
                     }
                     Spacer(minLength: 0)
                 }
-                Text("改完保存即生效，不用重启；写错路径会当作没有该 Agent。")
+                Text(L.t("改完保存即生效，不用重启；写错路径会当作没有该 Agent。",
+                       "Changes apply once saved, no restart needed; a wrong path is treated as \"agent not installed\"."))
                     .font(.system(size: 9.5)).foregroundStyle(.tertiary)
             }
             .padding(.horizontal, 16).padding(.vertical, 10)
@@ -1974,10 +1984,10 @@ enum Diagnostics {
         let claudeDir = AgentPaths.base("claude")
         let settingsPath = claudeDir + "/settings.json"
         var claudeOK = false
-        var claudeNote = "没找到 settings.json"
+        var claudeNote = L.t("没找到 settings.json", "settings.json not found")
         if let text = try? String(contentsOfFile: settingsPath, encoding: .utf8) {
             claudeOK = text.contains("agentsdone-hook")
-            claudeNote = claudeOK ? "hooks 已写入，新开会话后生效" : "settings.json 里没有 agentsdone-hook，重跑 install.sh"
+            claudeNote = claudeOK ? L.t("hooks 已写入，新开会话后生效", "hooks installed, applies to new sessions") : L.t("settings.json 里没有 agentsdone-hook，重跑 install.sh", "settings.json has no agentsdone-hook, re-run install.sh")
         }
         out.append(Row(title: "Claude Code", ok: claudeOK, detail: claudeNote))
 
@@ -1986,9 +1996,9 @@ enum Diagnostics {
         if fm.fileExists(atPath: codexDir) {
             let n = count(AgentPaths.codexSessions(), suffix: ".jsonl")
             out.append(Row(title: "Codex", ok: n > 0,
-                           detail: n > 0 ? "\(n) 个会话日志" : "目录在，但没有会话日志（还没跑过？）"))
+                           detail: n > 0 ? L.t("\(n) 个会话日志", "\(n) session logs") : L.t("目录在，但没有会话日志（还没跑过？）", "directory exists but has no session logs (never ran?)")))
         } else {
-            out.append(Row(title: "Codex", ok: false, detail: "目录不存在，没装或改过 CODEX_HOME"))
+            out.append(Row(title: "Codex", ok: false, detail: L.t("目录不存在，没装或改过 CODEX_HOME", "directory missing — not installed, or CODEX_HOME changed")))
         }
 
         // DeepSeek Harness
@@ -1997,58 +2007,59 @@ enum Diagnostics {
             let n = count(AgentPaths.dshSessions(), suffix: ".json")
             let node = DSHLogReader.nodePath != nil
             out.append(Row(title: "DeepSeek Harness", ok: n > 0,
-                           detail: "\(n) 个会话缓存" + (node ? " · 解释器已找到" : " · 找不到 DSH 解释器，审批提醒不可用")))
+                           detail: L.t("\(n) 个会话缓存", "\(n) session cache files") + (node ? L.t(" · 解释器已找到", " · runtime found") : L.t(" · 找不到 DSH 解释器，审批提醒不可用", " · DSH runtime not found, approval reminders unavailable"))))
         } else {
-            out.append(Row(title: "DeepSeek Harness", ok: false, detail: "目录不存在"))
+            out.append(Row(title: "DeepSeek Harness", ok: false, detail: L.t("目录不存在", "directory missing")))
         }
 
         // ZCode
         let zcodeDir = AgentPaths.base("zcode")
         let zcodeDB = zcodeDir + "/tasks-index.sqlite"
         if let size = fileSize(zcodeDB) {
-            out.append(Row(title: "ZCode", ok: true, detail: "任务索引 \(size)"))
+            out.append(Row(title: "ZCode", ok: true, detail: L.t("任务索引 \(size)", "task index \(size)")))
         } else {
-            out.append(Row(title: "ZCode", ok: false, detail: "没找到 tasks-index.sqlite"))
+            out.append(Row(title: "ZCode", ok: false, detail: L.t("没找到 tasks-index.sqlite", "tasks-index.sqlite not found")))
         }
 
         // Antigravity
         let agDir = AgentPaths.base("antigravity")
         let agDB = agDir + "/conversation_summaries.db"
         if let size = fileSize(agDB) {
-            out.append(Row(title: "Antigravity", ok: true, detail: "会话库 \(size)"))
+            out.append(Row(title: "Antigravity", ok: true, detail: L.t("会话库 \(size)", "session database \(size)")))
         } else {
-            out.append(Row(title: "Antigravity", ok: false, detail: "没找到 conversation_summaries.db"))
+            out.append(Row(title: "Antigravity", ok: false, detail: L.t("没找到 conversation_summaries.db", "conversation_summaries.db not found")))
         }
         return out
     }
 
     static let demoRows: [Row] = [
-        Row(title: "Claude Code", ok: true, detail: "hooks 已写入，新开会话后生效"),
-        Row(title: "Codex", ok: true, detail: "27 个会话日志"),
-        Row(title: "DeepSeek Harness", ok: true, detail: "69 个会话缓存 · 解释器已找到"),
-        Row(title: "ZCode", ok: true, detail: "任务索引 2.1 MB"),
-        Row(title: "Antigravity", ok: false, detail: "没找到 conversation_summaries.db"),
+        Row(title: "Claude Code", ok: true, detail: L.t("hooks 已写入，新开会话后生效", "hooks installed, applies to new sessions")),
+        Row(title: "Codex", ok: true, detail: L.t("27 个会话日志", "27 session logs")),
+        Row(title: "DeepSeek Harness", ok: true, detail: L.t("69 个会话缓存 · 解释器已找到", "69 session cache files · runtime found")),
+        Row(title: "ZCode", ok: true, detail: L.t("任务索引 2.1 MB", "task index 2.1 MB")),
+        Row(title: "Antigravity", ok: false, detail: L.t("没找到 conversation_summaries.db", "conversation_summaries.db not found")),
     ]
 
     /// 一键复制的纯文本，方便贴出来排查
     static func text() -> String {
         let ver = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "dev"
-        var lines = ["AgentsDone 诊断", "版本 \(ver)",
-                     "配置 \(ConfigStore.path)"]
+        var lines = [L.t("AgentsDone 诊断", "AgentsDone diagnostics"), L.t("版本 \(ver)", "version \(ver)"),
+                     L.t("配置 \(ConfigStore.path)", "config \(ConfigStore.path)")]
         for r in rows() {
-            lines.append("\(r.ok ? "✓" : "✗")  \(r.title)：\(r.detail)")
+            lines.append("\(r.ok ? "✓" : "✗")  \(r.title)" + L.t("：", ": ") + r.detail)
         }
-        lines.append("—— 路径 ——")
+        lines.append(L.t("—— 路径 ——", "— paths —"))
         for item in AgentPaths.labels {
-            lines.append("\(item.title)：\(AgentPaths.pretty(AgentPaths.base(item.key)))")
+            lines.append(item.title + L.t("：", ": ") + AgentPaths.pretty(AgentPaths.base(item.key)))
         }
-        lines.append("DSH 解释器：\(DSHLogReader.nodePath.map { AgentPaths.pretty($0) } ?? "未找到")")
+        let node = DSHLogReader.nodePath.map { AgentPaths.pretty($0) } ?? L.t("未找到", "not found")
+        lines.append(L.t("DSH 解释器：", "DSH runtime: ") + node)
         let cfgHosts = ConfigStore.load().hosts
-        lines.append("远端主机（配置）：" + (cfgHosts.isEmpty ? "无"
-            : cfgHosts.map { "\($0.host)\($0.enabled ? "" : "(停用)")" }.joined(separator: ", ")))
+        lines.append(L.t("远端主机（配置）：", "remote hosts (configured): ") + (cfgHosts.isEmpty ? L.t("无", "none")
+            : cfgHosts.map { "$0.host" + ($0.enabled ? "" : L.t("(停用)", " (disabled)")) }.joined(separator: ", ")))
         let live = RemoteWatcher.shared.status
         if !live.isEmpty {
-            lines.append("远端状态：" + live.keys.sorted().map { "\($0)=\(live[$0] ?? "?")" }.joined(separator: ", "))
+            lines.append(L.t("远端状态：", "remote state: ") + live.keys.sorted().map { "\($0)=\(live[$0] ?? "?")" }.joined(separator: ", "))
         }
         return lines.joined(separator: "\n")
     }
@@ -2062,9 +2073,9 @@ struct DiagnosticsView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 8) {
-                Text("诊断").font(.system(size: 13, weight: .semibold))
+                Text(L.t("诊断", "Diagnostics")).font(.system(size: 13, weight: .semibold))
                 Spacer()
-                Button(copied ? "已复制" : "复制诊断信息") {
+                Button(copied ? L.t("已复制", "Copied") : L.t("复制诊断信息", "Copy diagnostics")) {
                     NSPasteboard.general.clearContents()
                     NSPasteboard.general.setString(Diagnostics.text(), forType: .string)
                     copied = true
@@ -2073,7 +2084,8 @@ struct DiagnosticsView: View {
             }
             .padding(.horizontal, 16).padding(.top, 14).padding(.bottom, 4)
 
-            Text("显示本机实际能不能读到每个 Agent 的数据。说「没提醒」时先看这里。")
+            Text(L.t("显示本机实际能不能读到每个 Agent 的数据。说「没提醒」时先看这里。",
+                 "Shows whether each agent's data is actually readable here. Start here when a reminder does not show up."))
                 .font(.system(size: 11)).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
                 .padding(.horizontal, 16).padding(.bottom, 10)
@@ -2115,7 +2127,7 @@ struct DiagnosticsView: View {
 
             Divider()
             HStack {
-                Button("重新检查") { rows = Diagnostics.rows() }
+                Button(L.t("重新检查", "Check again")) { rows = Diagnostics.rows() }
                     .buttonStyle(.plain).font(.system(size: 11)).foregroundStyle(.blue)
                 Spacer()
             }
@@ -2135,7 +2147,7 @@ final class DiagnosticsWindowController {
             let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 420, height: 460),
                              styleMask: [.titled, .closable],
                              backing: .buffered, defer: false)
-            w.title = "AgentsDone · 诊断"
+            w.title = L.t("AgentsDone · 诊断", "AgentsDone · Diagnostics")
             w.contentViewController = NSHostingController(rootView: DiagnosticsView())
             w.isReleasedWhenClosed = false
             w.center()
@@ -2155,7 +2167,7 @@ final class SettingsWindowController {
             let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 480, height: 516),
                              styleMask: [.titled, .closable],
                              backing: .buffered, defer: false)
-            w.title = "AgentsDone · 远程设置"
+            w.title = L.t("AgentsDone · 远程设置", "AgentsDone · Remote")
             w.contentViewController = NSHostingController(rootView: SettingsView(model: SettingsModel()))
             w.isReleasedWhenClosed = false
             w.center()
@@ -2274,10 +2286,10 @@ struct PillView: View {
                 .truncationMode(.tail)
                 .frame(maxWidth: 260, alignment: .leading)
             Text(agentLabel(session.agent)).font(.system(size: 11)).foregroundStyle(.secondary)
-            if !session.host.isEmpty, session.host != agentLabel(session.agent), session.host != "终端" {
+            if !session.host.isEmpty, session.host != agentLabel(session.agent), session.host != L.t("终端", "Terminal") {
                 Text(session.host).font(.system(size: 11)).foregroundStyle(.secondary)
             }
-            Text(session.state == .needs ? "需要你" : "已完成")
+            Text(session.state == .needs ? L.t("需要你", "Needs you") : L.t("已完成", "Finished"))
                 .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(session.state == .needs ? Color.orange : Color.green)
         }
@@ -2299,9 +2311,9 @@ struct PanelView: View {
 
     /// 头部：有待处理的就先报待处理，否则报运行中
     var headerSummary: String {
-        if store.awaiting > 0 { return "\(store.awaiting) 个待处理" }
-        if store.running > 0 { return "\(store.running) 个运行中" }
-        return "无会话"
+        if store.awaiting > 0 { return L.t("\(store.awaiting) 个待处理", "\(store.awaiting) waiting") }
+        if store.running > 0 { return L.t("\(store.running) 个运行中", "\(store.running) running") }
+        return L.t("无会话", "No sessions")
     }
 
     private var sessionList: some View {
@@ -2327,9 +2339,9 @@ struct PanelView: View {
 
             if store.sessions.isEmpty {
                 VStack(spacing: 6) {
-                    Text("今日宜休息")
+                    Text(L.t("今日宜休息", "Nothing running"))
                         .font(.system(size: 13, weight: .medium)).foregroundStyle(.secondary)
-                    Text("没有会话在跑，喝口水吧")
+                    Text(L.t("没有会话在跑，喝口水吧", "Time for a break"))
                         .font(.system(size: 10)).foregroundStyle(.tertiary)
                 }
                 .frame(maxWidth: .infinity).padding(.vertical, 30)
@@ -2345,17 +2357,17 @@ struct PanelView: View {
 
             HStack(spacing: 10) {
                 Button(action: onClear) {
-                    Text("清除").font(.system(size: 11))
+                    Text(L.t("清除", "Clear")).font(.system(size: 11))
                 }.buttonStyle(.plain).foregroundStyle(.secondary)
                 Spacer()
                 Button(action: { SettingsWindowController.shared.show() }) {
-                    Text("设置").font(.system(size: 11))
+                    Text(L.t("设置", "Settings")).font(.system(size: 11))
                 }.buttonStyle(.plain).foregroundStyle(.secondary)
                 Button(action: onMute) {
-                    Text(store.muted ? "已静音" : "静音").font(.system(size: 11))
+                    Text(store.muted ? L.t("已静音", "Muted") : L.t("静音", "Mute")).font(.system(size: 11))
                 }.buttonStyle(.plain).foregroundStyle(.secondary)
                 Button(action: { NSApp.terminate(nil) }) {
-                    Text("退出").font(.system(size: 11))
+                    Text(L.t("退出", "Quit")).font(.system(size: 11))
                 }.buttonStyle(.plain).foregroundStyle(.secondary)
             }
             .padding(.horizontal, 14).padding(.vertical, 9)
@@ -2380,13 +2392,13 @@ struct RowView: View {
         switch session.state {
         case .needs:
             // 「需要你」的具体原因很多，挑最准的那个词
-            if session.detail.hasPrefix("等待批准") { return "待批准" }
-            if session.detail.hasPrefix("等待回答") { return "待回答" }
-            if session.detail.hasPrefix("等待授权") { return "待授权" }
-            if session.detail.hasPrefix("等待你的确认") { return "待确认" }
-            return "需要你"
-        case .done: return "已完成"
-        case .working: return "运行中"
+            if session.detail.hasPrefix(L.t("等待批准", "Waiting for approval")) { return L.t("待批准", "Approval") }
+            if session.detail.hasPrefix(L.t("等待回答", "Waiting for your reply")) { return L.t("待回答", "Reply") }
+            if session.detail.hasPrefix(L.t("等待授权", "Waiting for permission")) { return L.t("待授权", "Permission") }
+            if session.detail.hasPrefix(L.t("等待你的确认", "Waiting for your confirmation")) { return L.t("待确认", "Confirm") }
+            return L.t("需要你", "Needs you")
+        case .done: return L.t("已完成", "Finished")
+        case .working: return L.t("运行中", "Running")
         }
     }
 
@@ -2396,7 +2408,7 @@ struct RowView: View {
             let rest = String(session.host.dropFirst(label.count)).trimmingCharacters(in: .whitespaces)
             return rest.isEmpty ? "" : rest
         }
-        return session.host == "终端" ? "" : session.host
+        return session.host == L.t("终端", "Terminal") ? "" : session.host
     }
 
     var subtitle: String {
@@ -2482,6 +2494,19 @@ final class HotKeyManager {
     }
 }
 
+/// 界面语言：默认英文；系统语言是中文时用中文。
+/// 出图/测试可用 AGENTSDONE_LANG=zh|en 覆盖。
+enum L {
+    static let chinese: Bool = {
+        if let forced = ProcessInfo.processInfo.environment["AGENTSDONE_LANG"] {
+            return forced.lowercased().hasPrefix("zh")
+        }
+        return (Locale.preferredLanguages.first ?? "").lowercased().hasPrefix("zh")
+    }()
+
+    static func t(_ zh: String, _ en: String) -> String { chinese ? zh : en }
+}
+
 // MARK: - App
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
@@ -2503,13 +2528,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if !store.muted { NSSound(named: "Glass")?.play() }
         let demo = [
             Session(id: "demo-done", agent: "codex", project: "checkout-service",
-                    title: "重构订单页的数据层", cwd: "", host: "VS Code",
+                    title: L.t("重构订单页的数据层", "Refactor the order page data layer"), cwd: "", host: "VS Code",
                     bundleId: "com.microsoft.VSCode", tty: "", state: .done,
-                    detail: "12 个测试全部通过", updated: Date()),
+                    detail: L.t("12 个测试全部通过", "all 12 tests pass"), updated: Date()),
             Session(id: "demo-needs", agent: "claude", project: "api-server",
-                    title: "把限流挪到网关层", cwd: "", host: "iTerm",
+                    title: L.t("把限流挪到网关层", "Move rate limiting to the gateway"), cwd: "", host: "iTerm",
                     bundleId: "com.googlecode.iterm2", tty: "", state: .needs,
-                    detail: "等待批准：Bash · git push origin main", updated: Date()),
+                    detail: L.t("等待批准：Bash · git push origin main", "Waiting for approval: Bash · git push origin main"), updated: Date()),
         ]
         for s in demo { pill.enqueue(s, onClick: {}) }
     }
@@ -2679,7 +2704,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         img?.isTemplate = true
         button.image = img
         button.title = n > 0 ? " \(n)" : ""
-        button.toolTip = n > 0 ? "\(n) 个会话等待你" : "AgentsDone"
+        button.toolTip = n > 0 ? L.t("\(n) 个会话等待你", "\(n) session(s) waiting for you") : "AgentsDone"
     }
 
     @objc func togglePopover() {
@@ -2778,33 +2803,33 @@ enum Snapshot {
         let store = Store()
         let samples: [HookEvent] = [
             HookEvent(agent: "claude", kind: "needs", sessionId: "a", cwd: "/Users/me/work/api-server",
-                      project: "api-server", title: "复盘上周的权限模型改造",
+                      project: "api-server", title: L.t("复盘上周的权限模型改造", "Review last week's permission model rework"),
                       detail: "Claude needs your permission to use Bash", host: "VS Code", bundleId: "com.microsoft.VSCode"),
             HookEvent(agent: "claude", kind: "done", sessionId: "c", cwd: "/Users/me/work/infra",
-                      project: "infra", title: "Helm chart 升到 1.4",
-                      detail: "Helm chart 已更新", host: "iTerm", bundleId: "com.googlecode.iterm2"),
+                      project: "infra", title: L.t("Helm chart 升到 1.4", "Bump the Helm chart to 1.4"),
+                      detail: L.t("Helm chart 已更新", "Helm chart updated"), host: "iTerm", bundleId: "com.googlecode.iterm2"),
             HookEvent(agent: "codex", kind: "done", sessionId: "g", cwd: "/Users/me/work/checkout-service",
-                      project: "checkout-service", title: "修复训练管道的重试逻辑",
-                      detail: "远端跑完了：修好了数据管道的重试逻辑", host: "VS Code（远程）",
+                      project: "checkout-service", title: L.t("修复训练管道的重试逻辑", "Fix retries in the training pipeline"),
+                      detail: L.t("远端跑完了：修好了数据管道的重试逻辑", "remote finished: data pipeline retries fixed"), host: L.t("VS Code（远程）", "VS Code (remote)"),
                       bundleId: "com.microsoft.VSCode"),
             HookEvent(agent: "dsh", kind: "needs", sessionId: "e", cwd: "/Users/me/work/agent-core",
-                      project: "agent-core", title: "把重试逻辑挪到适配层",
-                      detail: "等待批准：bash · 安装依赖到系统目录", host: "DeepSeek Harness",
+                      project: "agent-core", title: L.t("把重试逻辑挪到适配层", "Move the retry logic into the adapter layer"),
+                      detail: L.t("等待批准：bash · 安装依赖到系统目录", "Waiting for approval: bash · install deps system-wide"), host: "DeepSeek Harness",
                       bundleId: "com.deepseek.dsh"),
             HookEvent(agent: "zcode", kind: "needs", sessionId: "f", cwd: "/Users/me/work/admin-panel",
-                      project: "admin-panel", title: "实现登录页",
-                      detail: "任务出错", host: "ZCode", bundleId: "dev.zcode.app"),
+                      project: "admin-panel", title: L.t("实现登录页", "Build the sign-in page"),
+                      detail: L.t("任务出错", "Task errored"), host: "ZCode", bundleId: "dev.zcode.app"),
             HookEvent(agent: "claude", kind: "needs", sessionId: "h", cwd: "/Users/me/work/api-server",
-                      project: "api-server", title: "把限流挪到网关层",
-                      detail: "等待批准：Bash · git push origin main",
+                      project: "api-server", title: L.t("把限流挪到网关层", "Move rate limiting to the gateway"),
+                      detail: L.t("等待批准：Bash · git push origin main", "Waiting for approval: Bash · git push origin main"),
                       host: "iTerm", bundleId: "com.googlecode.iterm2"),
             HookEvent(agent: "antigravity", kind: "needs", sessionId: "k", cwd: "",
-                      project: "Antigravity", title: "把 CertMem 的权限模型讲清楚",
-                      detail: "等待你在 Antigravity 里确认", host: "Antigravity",
+                      project: "Antigravity", title: L.t("把 CertMem 的权限模型讲清楚", "Explain the CertMem permission model"),
+                      detail: L.t("等待你在 Antigravity 里确认", "Waiting for you in Antigravity"), host: "Antigravity",
                       bundleId: "com.google.antigravity"),
             HookEvent(agent: "codex", kind: "working", sessionId: "i", cwd: "/Users/me/work/agent-core",
-                      project: "agent-core", title: "重写评测脚本支持多卡并行",
-                      detail: "", host: "VS Code（远程）", bundleId: "com.microsoft.VSCode"),
+                      project: "agent-core", title: L.t("重写评测脚本支持多卡并行", "Rewrite the eval script for multi-GPU"),
+                      detail: "", host: L.t("VS Code（远程）", "VS Code (remote)"), bundleId: "com.microsoft.VSCode"),
         ]
         for e in samples { store.ingest(e) }
         let content = PanelView(store: store, onJump: { _ in }, onClear: {}, onMute: {})
@@ -2831,7 +2856,7 @@ enum Snapshot {
         let s = Session(id: "x", agent: "codex", project: "web-client",
                         title: "重构订单页的数据层", cwd: "/tmp",
                         host: "VS Code", bundleId: "com.microsoft.VSCode", tty: "",
-                        state: .done, detail: "重构完成，12 个测试全部通过", updated: Date())
+                        state: .done, detail: L.t("重构完成，12 个测试全部通过", "Refactor done, all 12 tests pass"), updated: Date())
         // 真机上胶囊靠系统材质透出背景，导出图里垫一层不透明底色，免得在深色主题下看不清
         let content = PillView(session: s)
             .padding(.horizontal, 16).padding(.vertical, 10)

@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.21
+
+- The whole interface is localized: English by default, Chinese when the system language is Chinese
+- `AGENTSDONE_LANG=zh|en` forces a language (used for the screenshots)
+- Screenshots in both languages: `docs/` for English, `docs/zh/` for Chinese
+
 ## 0.3.20
 
 - Configurable completion sound (Glass / Ping / Tink / Submarine / none)
