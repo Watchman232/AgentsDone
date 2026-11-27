@@ -131,6 +131,7 @@ automatically when DSH lives in `/Applications` or `~/Applications`; set `dshNod
 · `AGENTSDONE_CLAUDE_ROOT` · `CODEX_HOME` / `AGENTSDONE_CODEX_ROOT` · `AGENTSDONE_DSH_HOME` /
 `AGENTSDONE_DSH_ROOT` / `AGENTSDONE_DSH_LOGS` / `AGENTSDONE_DSH_NODE` · `AGENTSDONE_ZCODE_ROOT`
 · `AGENTSDONE_ANTIGRAVITY_ROOT` · `AGENTSDONE_REMOTE=0` (disable remote) · `AGENTSDONE_NO_LAUNCH=1`
+· `AGENTSDONE_SNOOZE_MINUTES=5` (start muted, for testing)
 
 </details>
 

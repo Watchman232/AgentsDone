@@ -2519,6 +2519,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                                                queue: .main) { [weak self] _ in
             self?.playTestPill()
         }
+        // 测试用：启动就进入静音 N 分钟
+        if let m = ProcessInfo.processInfo.environment["AGENTSDONE_SNOOZE_MINUTES"], let mins = Int(m), mins > 0 {
+            store.snoozeUntil = Date().addingTimeInterval(Double(mins) * 60)
+        }
         NotificationCenter.default.addObserver(forName: .agentsDoneSnooze, object: nil,
                                                queue: .main) { [weak self] note in
             let minutes = (note.userInfo?["minutes"] as? Int) ?? 0
